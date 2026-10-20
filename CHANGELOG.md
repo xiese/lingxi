@@ -2,6 +2,18 @@
 
 2026-10-20 仓库更名为 **lingxi（灵犀）**。
 
+### 隐私闸门（新增）
+
+- `.githooks/pre-commit`、`.githooks/pre-push` 此前从未生效（`.git/hooks` 为空、`core.hooksPath` 未设置）。
+  本仓已设置 `core.hooksPath = .githooks`，提交与推送前真实执行闸门。
+- `scripts/ci/guard.py` 扩充：新增 `BANNED_WORDS`（称呼、真实业务名）、`HOSTNAME_LIKE` 通用主机名模式、
+  `check_authors()` 提交作者校验；`authors` / `history` 接入 `all`。
+  规则本身不含任何真实主机名，用通用模式匹配（大写字母 + 长数字）。
+- `pre-commit` 跑 `paths` / `content` / `authors`；`pre-push` 跑 `history` / `authors`。
+- 本仓 `origin` 的 push URL 置为 `DISABLED-PUSH-NEED-APPROVAL`，未经明确批准无法推送。
+- 仓库历史经 `git filter-repo` 重写：提交信息与历史内容中不含称呼、真实业务名、真实主机名；
+  作者统一为 `xiese & lingxi <lingxi@users.noreply.github.com>`。
+
 ### 变更
 
 - GitHub 仓库改名为 `xiese/lingxi`；仓库历史重建为单根提交的独立快照，与旧历史无共同祖先。
