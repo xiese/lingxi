@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>知识库</title>
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="format-detection" content="telephone=no">
+<link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
+<link rel="manifest" href="/web/manifest.json">
+<script defer src="./vendor/d3.v7.min.js"></script>
+<script defer src="./vendor/marked.min.js"></script>
+<style>
+:root{
+--bg:#f9fafb;--card-bg:#fff;--card-border:#e5e7eb;
+--text:#111827;--text2:#374151;--text3:#6b7280;--text4:#9ca3af;
+--blue:#2563eb;--blue-bg:#eff6ff;--blue-text:#2563eb;
+--hover:#f3f4f6;--code-bg:#f3f4f6;--code-text:#db2777;
+--th-bg:#f9fafb;--scroll-track:#f3f4f6;--scroll-thumb:#d1d5db;
+--sidebar-bg:#fff;--sidebar-border:#e5e7eb;
+--shadow:rgba(0,0,0,.04);--input-bg:#fff;--input-border:#d1d5db;
+--gray50:#f9fafb;--gray100:#f3f4f6;--gray200:#e5e7eb;
+}
+.dark{
+--bg:#111827;--card-bg:#1f2937;--card-border:#374151;
+--text:#f9fafb;--text2:#e5e7eb;--text3:#9ca3af;--text4:#6b7280;
+--blue:#60a5fa;--blue-bg:#1e3a5f;--blue-text:#93c5fd;
+--hover:#374151;--code-bg:#374151;--code-text:#f472b6;
+--th-bg:#374151;--scroll-track:#1f2937;--scroll-thumb:#4b5563;
+--sidebar-bg:#1f2937;--sidebar-border:#374151;
+--shadow:rgba(0,0,0,.3);--input-bg:#374151;--input-border:#4b5563;
+--gray50:#1f2937;--gray100:#374151;--gray200:#4b5563;
+}
+*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text)}
+.sidebar{width:200px;flex-shrink:0}.sidebar-item{padding:8px 12px;border-radius:6px;cursor:pointer;transition:all .15s;color:var(--text2)}
+.sidebar-item:hover{background:var(--hover)}.sidebar-item.active{background:var(--blue-bg);color:var(--blue);font-weight:600}
+.card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;box-shadow:0 1px 3px var(--shadow)}
+/* 设置页分组卡片（2026-10-18 第 1 项）：只新增类，不改既有 .card / 表单规则 */
+/* 2026-10-19：改成 iOS 系统设置范式——组标题在卡片外、无边框整片白卡、44px 行高、
+   分隔线从图标右侧缩进、彩色圆角图标底。只改设置页类，不动其他页面。 */
+#sf{display:flex;flex-direction:column;gap:22px;padding:0 0 24px}
+.set-title{font-size:34px;font-weight:700;letter-spacing:-.4px;color:var(--text);margin:2px 0 0;line-height:1.15}
+.set-group{display:flex;flex-direction:column;gap:7px}
+.set-group-head{padding:0 16px;font-size:13px;font-weight:400;color:var(--text3);letter-spacing:.1px}
+/* iOS 范式：卡片下方的说明小字（二级页顶部说明、分组尾注） */
+.set-foot{padding:0 16px;font-size:13px;line-height:1.4;color:var(--text3)}
+.set-card{background:var(--card-bg);border:none;border-radius:10px;overflow:hidden}
+.set-row{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:9px 16px;border-bottom:none}
+.set-row::after{content:'';position:absolute;left:55px;right:0;bottom:0;height:1px;background:var(--card-border);transform:scaleY(.6)}
+.set-row:last-child::after{display:none}
+.set-label{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.set-label>span:first-child{font-size:17px;color:var(--text);letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.set-hint{font-size:12px;color:var(--text3);line-height:1.35}
+.set-val{flex:0 0 auto;width:min(58vw,320px);border:1px solid var(--input-border);background:var(--input-bg);color:var(--text);border-radius:8px;padding:7px 10px;font-size:13px}
+.set-val:focus{outline:none;border-color:var(--blue)}
+.set-secret{font-family:ui-monospace,monospace}
+.set-select{cursor:pointer}
+.set-logout{flex:0 0 auto;border:1px solid var(--card-border);background:transparent;color:#dc2626;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer}
+.set-logout:hover{background:rgba(220,38,38,.08)}
+/* 一级列表 / 二级页（2026-10-18 第 13 项）：只新增类，不动上面的既有规则 */
+.set-search{position:relative;margin-bottom:0}
+/* iOS 搜索框：灰底无边框 + 内嵌放大镜（伪元素，不新增 DOM） */
+.set-search::before{content:'';position:absolute;left:11px;top:50%;width:13px;height:13px;margin-top:-7px;pointer-events:none;
+  background:no-repeat center/13px url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.2' stroke-linecap='round'><circle cx='10.5' cy='10.5' r='6.5'/><path d='M15.5 15.5 21 21'/></svg>")}
+.set-search input{width:100%;box-sizing:border-box;border:none;background:var(--hover);color:var(--text);border-radius:10px;padding:9px 12px 9px 32px;font-size:17px;letter-spacing:-.2px;-webkit-appearance:none;appearance:none}
+.set-search input::placeholder{color:var(--text4)}
+.set-search input:focus{outline:none}
+.set-row-link{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.set-row-link:active{background:var(--hover)}
+@media (hover:hover){.set-row-link:hover{background:var(--hover)}}
+.set-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:29px;height:29px;border-radius:6.5px;font-size:15px;line-height:1;background:var(--blue);color:#fff;box-shadow:inset 0 -1px 1px rgba(0,0,0,.06)}
+/* iOS 范式（2026-10-19）：图标用白色 SVG 线条，不用 emoji——emoji 在彩色方块里
+   会带自己的彩色字形，白底方块内直接变成豆腐块/糊成一团，苹果系统设置里是纯白线条图形。 */
+.set-icon svg{width:17px;height:17px;display:block;stroke:#fff;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* 苹果系统色（#007AFF 蓝 / #34C759 绿 / #FF9500 橙 / #FF3B30 红 / #AF52DE 紫 / #5856D6 靛 / #30B0C7 青 / #FF2D55 粉） */
+.set-icon.i-blue{background:linear-gradient(180deg,#0a84ff,#007aff)}
+.set-icon.i-green{background:linear-gradient(180deg,#34c759,#28a745)}
+.set-icon.i-orange{background:linear-gradient(180deg,#ff9f0a,#ff9500)}
+.set-icon.i-red{background:linear-gradient(180deg,#ff453a,#ff3b30)}
+.set-icon.i-purple{background:linear-gradient(180deg,#bf5af2,#af52de)}
+.set-icon.i-indigo{background:linear-gradient(180deg,#5e5ce6,#5856d6)}
+.set-icon.i-teal{background:linear-gradient(180deg,#40c8e0,#30b0c7)}
+.set-icon.i-pink{background:linear-gradient(180deg,#ff375f,#ff2d55)}
+.set-icon.i-gray{background:linear-gradient(180deg,#8e8e93,#7c7c80)}
+/* 设备页（2026-10-19 修）：原来用了不存在的 --fg / --muted 变量，颜色直接失效，
+   改为项目已有的 --text / --text3；并按 iOS 设置范式做成行式分组。 */
+.set-dev{padding:10px 16px;border-bottom:1px solid var(--card-border)}
+.set-dev:last-child{border-bottom:none}
+.set-dev-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.set-dev-name{font-size:17px;color:var(--text);letter-spacing:-.2px}
+.set-dev-meta{font-size:12px;color:var(--text3);margin-top:2px}
+.set-dev-tks{margin-top:6px;border-top:1px solid var(--card-border);padding-top:6px}
+.set-dev-tk{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text3);padding:3px 0}
+.set-dev-tk>span:first-child{flex:1;color:var(--text)}
+.set-revoke{border:1px solid var(--card-border);background:transparent;color:#dc2626;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer}
+.set-revoke:hover{background:rgba(220,38,38,.08)}
+.set-empty{padding:14px 12px;font-size:13px;color:var(--text3);text-align:center}
+.set-checks{flex:1;display:flex;flex-direction:column;gap:8px;padding:2px 0}
+.set-check{display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;user-select:none}
+.set-check input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--accent,#2563eb);cursor:pointer}
+.set-cur{flex:0 0 auto;max-width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--text3);text-align:right}
+.set-arrow{flex:0 0 auto;font-size:18px;line-height:1;color:var(--text3);margin-left:2px}
+.set-back{display:inline-flex;align-items:center;font-size:14px;color:var(--blue);cursor:pointer;padding:2px 4px;margin-bottom:2px}
+.set-empty{font-size:13px;color:var(--text3);padding:10px 4px}
+.set-save-bar{padding-top:4px}
+/* 二级页：iOS 里编辑项是「独立一张卡里一个整宽输入框」 */
+.set-detail-box{padding:8px 16px}
+.set-val-full{width:100%!important;box-sizing:border-box;font-size:17px;padding:10px 12px;border-radius:9px}
+.set-save{width:100%;border:none;border-radius:10px;background:var(--blue);color:#fff;padding:11px;font-size:15px;cursor:pointer}
+.set-save:hover{filter:brightness(1.06)}
+/* 2026-10-19 遗留 #15：组内二级小标题 + 插件组 */
+.set-subhead{padding:0 16px;font-size:13px;font-weight:400;color:var(--text3);letter-spacing:.1px}
+.set-group-plugin{margin-top:2px}
+.set-plugin-box{padding:0}
+/* 没有插件挂到设置页时，整组（含小标题）一起藏起来，不留空标题 */
+.set-plugin-box:empty{display:none}
+.set-group-plugin:has(.set-plugin-box:empty){display:none}
+@media (width<=720px){
+  /* iOS 设置范式：行内保持横向（图标-名称-值-箭头），不再上下堆叠 */
+  .set-val{width:100%}
+  .set-logout{width:100%}
+  .set-title{font-size:32px}
+}
+/* 日志页类别标签 + 清理入口（2026-10-18 第 4 项）：只新增类 */
+.log-cat{border:1px solid var(--card-border);background:var(--card-bg);color:var(--text3);border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer}
+.log-cat.is-on{background:var(--blue);border-color:var(--blue);color:#fff}
+.log-cat .log-cat-n{opacity:.75;margin-left:4px}
+.log-danger{border:1px solid rgba(220,38,38,.35);background:transparent;color:#dc2626;border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer}
+.log-danger:hover{background:rgba(220,38,38,.08)}
+.log-warn{background:rgba(220,38,38,.07);border:1px solid rgba(220,38,38,.2);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px}
+.note-content h1{font-size:1.5em;font-weight:700;margin-bottom:.5em;color:var(--text)}
+.note-content h2{font-size:1.2em;font-weight:600;margin:1em 0 .5em;color:var(--blue)}
+.note-content h3{font-size:1.05em;font-weight:600;margin:.8em 0 .3em;color:var(--text2)}
+.note-content code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.9em;color:var(--code-text)}
+.note-content pre{background:var(--code-bg);padding:12px;border-radius:8px;overflow-x:auto;margin:8px 0}
+.note-content table{width:100%;border-collapse:collapse;margin:8px 0}
+.note-content td,.note-content th{border:1px solid var(--card-border);padding:6px 10px;text-align:left;font-size:.9em}
+.note-content th{background:var(--th-bg);font-weight:600;color:var(--text2)}
+.note-content blockquote{border-left:3px solid var(--blue);padding-left:12px;color:var(--text3);margin:8px 0}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--scroll-track)}::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:3px}
+#graph-container svg{width:100%;height:100%}#graph-container line{stroke:var(--card-border);stroke-opacity:.6}#graph-container circle{cursor:pointer}
+@media(max-width:768px){.sidebar{width:100%;flex-direction:row;overflow-x:auto}.sidebar-item{white-space:nowrap}}
+.dark-toggle{cursor:pointer;font-size:1.2em;padding:2px 8px;border-radius:20px;transition:all .2s;border:none;background:var(--hover);color:var(--text3)}
+.dark-toggle:hover{background:var(--blue-bg);color:var(--blue)}
+/* Toast 通知系统 */
+#toast-ct{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 20px;border-radius:8px;color:#fff;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.15);animation:slideIn .3s ease;cursor:pointer;max-width:380px;word-break:break-word;display:flex;align-items:center;gap:8px}
+.toast.success{background:#10b981}.toast.error{background:#ef4444}.toast.warning{background:#f59e0b}.toast.info{background:#3b82f6}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+/* 骨架屏 */
+.skeleton{background:linear-gradient(90deg,var(--gray100) 25%,var(--gray200) 50%,var(--gray100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.sk-card{height:88px;border-radius:8px;margin-bottom:16px}
+.sk-row{height:20px;margin-bottom:8px;width:100%}
+.sk-row.sk-w60{width:60%}.sk-row.sk-w80{width:80%}.sk-row.sk-w40{width:40%}
+.sk-h1{height:32px;margin-bottom:16px;width:45%}.sk-h2{height:24px;margin-bottom:12px;width:30%}
+.sk-img{height:200px;border-radius:8px;margin-bottom:12px}
+/* 面包屑导航 */
+.breadcrumb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;margin-bottom:12px;color:var(--text3)}
+.breadcrumb a{cursor:pointer;color:var(--blue);text-decoration:none;transition:color .15s}
+.breadcrumb a:hover{color:var(--blue-text);text-decoration:underline}
+.breadcrumb span{color:var(--text4)}
+/* 编辑模式 */
+.edit-toolbar{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.edit-textarea{width:100%;min-height:300px;border:1px solid var(--input-border);border-radius:8px;padding:16px;font-family:'Cascadia Code','Fira Code',monospace;font-size:14px;background:var(--input-bg);color:var(--text);resize:vertical;line-height:1.6;outline:none}
+.edit-textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+/* 高亮搜索词 */
+mark.hl{background:#fef08a;color:#854d0e;padding:1px 3px;border-radius:2px;font-weight:600}
+.dark mark.hl{background:#713f12;color:#fef08a}
+/* 第 7-1 项：断链双链。用红色 + 虚线下划线，不用删除线——
+   断链是「目标还没写」，不是「链接作废」，删除线会让人误以为内容已废弃。 */
+.wl-broken{color:#dc2626!important;border-bottom:1px dashed #dc2626;text-decoration:none!important;cursor:help}
+.dark .wl-broken{color:#f87171!important;border-bottom-color:#f87171}
+/* 第 5 项：正文绝对路径徽标。三种状态必须一眼能分开——
+   绿实线=本机可点，绿虚线=本机存在但不在库内（不可点），灰=本机没有。
+   用「实线/虚线」而不是只换颜色：色弱也能靠线型区分。 */
+.abs-path{white-space:nowrap;border-bottom:1px solid transparent;padding:0 1px}
+.abs-path .abs-badge{display:inline-block;font-size:10px;line-height:1.5;padding:0 4px;margin-right:4px;border-radius:3px;vertical-align:1px;white-space:nowrap;font-weight:600}
+.abs-unknown{color:#6b7280;border-bottom:1px dashed #9ca3af;cursor:default}
+.abs-unknown .abs-badge{background:#e5e7eb;color:#4b5563}
+.set-textarea{width:100%;min-height:88px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;resize:vertical}
+.abs-note{color:#047857!important;border-bottom:1px solid #10b981;cursor:pointer}
+.abs-note .abs-badge{background:#d1fae5;color:#047857}
+.abs-note:hover{background:#ecfdf5}
+.abs-file{color:#047857!important;border-bottom:1px dashed #10b981;cursor:default}
+.abs-file .abs-badge{background:#d1fae5;color:#047857}
+.abs-remote{color:#6b7280!important;border-bottom:none;cursor:default}
+.abs-remote .abs-badge{background:#e5e7eb;color:#4b5563}
+.dark .abs-note{color:#34d399!important}
+.dark .abs-note .abs-badge{background:#064e3b;color:#6ee7b7}
+.dark .abs-file{color:#34d399!important}
+.dark .abs-file .abs-badge{background:#064e3b;color:#6ee7b7}
+.dark .abs-remote{color:#9ca3af!important}
+.dark .abs-remote .abs-badge{background:#374151;color:#d1d5db}
+/* v5.6 P3: 打印友好样式 */
+@media print{
+  header, nav, .sidebar, #toast-ct, .edit-toolbar, .dark-toggle, button{display:none!important}
+  body{background:#fff!important;color:#000!important;font-size:12pt}
+  main{padding:0!important;margin:0!important}
+  .card{border:1px solid #ccc!important;box-shadow:none!important;break-inside:avoid}
+  .note-content{max-width:100%!important}
+  .note-content pre,.note-content code{background:#f5f5f5!important;color:#000!important;border:1px solid #ddd}
+  .note-content table{font-size:10pt}.note-content th{background:#eee!important;color:#000!important}
+  .note-content a{color:#000!important;text-decoration:underline}
+  .breadcrumb{color:#666!important}
+  @page{margin:1.5cm}
+}
+/* v5.6 标签云 */
+.tag-cloud{display:flex;flex-wrap:wrap;gap:6px;padding:12px 0}
+.tag-item{font-size:12px;padding:3px 10px;border-radius:20px;cursor:pointer;transition:all .15s;white-space:nowrap;background:var(--hover);color:var(--text2);border:1px solid transparent}
+.tag-item:hover{background:var(--blue-bg);color:var(--blue);border-color:var(--blue)}
+.tag-item.selected{background:var(--blue-bg);color:var(--blue);border-color:var(--blue);font-weight:600}
+/* v5.6 版本历史 */
+.history-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;max-width:700px;width:90%;max-height:80vh;overflow-y:auto}
+.history-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999}
+.history-add{color:#10b981}.history-del{color:#ef4444}.history-diff{font-family:monospace;font-size:12px;white-space:pre-wrap;background:var(--code-bg);padding:12px;border-radius:6px;overflow-x:auto}
+/* v5.6 批量操作 */
+.batch-bar{display:none;position:sticky;bottom:0;background:var(--card-bg);border-top:2px solid var(--blue);padding:10px 16px;z-index:100;align-items:center;gap:10px;flex-wrap:wrap}
+.batch-bar.show{display:flex}
+.batch-check{width:16px;height:16px;cursor:pointer;accent-color:var(--blue)}
+/* v5.6 自动目录 TOC */
+.toc-panel{position:sticky;top:10px;max-height:60vh;overflow-y:auto;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;padding:12px;font-size:12px}
+.toc-panel h4{font-weight:600;margin-bottom:8px;color:var(--text2)}
+.toc-item{display:block;padding:2px 0;cursor:pointer;color:var(--text3);transition:color .15s;text-decoration:none;border-left:2px solid transparent;padding-left:8px}
+.toc-item:hover{color:var(--blue)}.toc-item.h2{padding-left:16px}.toc-item.h3{padding-left:24px}
+/* v5.6 移动端底部导航 */
+.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--card-bg);border-top:1px solid var(--card-border);z-index:100;padding:4px 0;padding-bottom:env(safe-area-inset-bottom,4px);overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch}
+.mobile-nav .mn-item{flex:1 1 0;min-width:0;text-align:center;padding:4px 1px 3px;cursor:pointer;color:var(--text3);font-size:10px;line-height:1.25;transition:color .15s;-webkit-tap-highlight-color:transparent;touch-action:manipulation;white-space:nowrap;overflow:hidden}
+.mobile-nav .mn-item.active{color:var(--blue)}.mobile-nav .mn-item span{display:block;font-size:17px;line-height:1.2;margin-bottom:1px}
+@media(max-width:768px){.sidebar{display:none!important}.mobile-nav{display:flex}main{padding-bottom:72px!important}}
+/* v5.6 移动端增强 */
+@media(max-width:768px){
+  html{width:100%;max-width:100%}
+  body{width:100%;max-width:100%;overflow-x:hidden}
+  body{font-size:15px}
+  #app>.flex{display:block!important;min-height:auto!important;width:100%;overflow-x:hidden}
+  header{padding:8px 12px!important;gap:8px}header h1{font-size:16px!important;white-space:nowrap}
+  header .flex.items-center.gap-4{gap:8px!important}
+  #ixs,#verBadge{display:none!important}
+  .sidebar{display:none!important}.mobile-nav{display:flex}
+  main{width:100%!important;min-width:0!important;padding:12px!important;padding-bottom:76px!important;overflow-x:hidden!important}
+  .card{padding:12px!important}.card .text-3xl{font-size:20px!important}
+  .note-content{max-width:100%;overflow-wrap:anywhere;word-break:break-word}
+  .note-content h1{font-size:1.2em!important}.note-content h2{font-size:1.1em!important}
+  .note-content pre{max-width:100%;overflow-x:auto}
+  .note-content table{display:block;max-width:100%;overflow-x:auto}
+  .edit-textarea{min-height:200px!important;font-size:14px!important}
+  .toc-panel{display:none!important}
+  /* 第 20 项：上面这条是为了隐藏桌面右侧栏，但抽屉里的 #tocContent 的 class 也叫 toc-panel，
+     被一起隐藏了——抽屉弹出来是一屏空白。这里只把抽屉内部的内容放出来。 */
+  #tocPanel.mobile-show #tocContent{display:block!important}
+  .note-dir-toggle{display:flex!important}.mobile-toc-btn{display:flex!important}
+  #tocPanel.mobile-show{display:block!important;position:fixed;top:0;right:0;width:min(82vw,320px);height:100vh;z-index:200;padding:12px;background:var(--card-bg);border-left:1px solid var(--card-border);box-shadow:-4px 0 12px rgba(0,0,0,.1);overflow-y:auto}
+  .note-dir-panel{display:none!important}
+  #noteDirPanel.mobile-show{display:block!important;position:fixed;top:0;left:0;width:min(86vw,320px);height:100vh;z-index:200;padding:12px;background:var(--card-bg,#fff);border-right:1px solid var(--card-border,#e5e7eb);box-shadow:4px 0 12px rgba(0,0,0,.1);overflow-y:auto}
+  .flex.gap-3.mb-6{flex-direction:column;gap:8px!important}.flex.gap-3.mb-6 button{width:100%}
+  #tab-graph .card{height:calc(100vh - 128px)!important;min-height:420px;overflow:hidden}
+  #gc{width:100%;height:100%;overflow:hidden}
+  #tab-notes .flex.gap-4{display:block!important;height:auto!important;min-width:0!important}
+  #tab-notes #nv{width:100%;min-width:0;min-height:calc(100vh - 150px);overflow-x:hidden!important;padding:12px!important}
+  .batch-bar{padding:8px!important;flex-wrap:wrap;gap:6px;bottom:48px}
+  .edit-toolbar{flex-wrap:wrap;gap:4px}.edit-toolbar button{font-size:11px!important;padding:4px 8px!important}
+  .grid.grid-cols-1.lg\\:grid-cols-2{grid-template-columns:1fr!important}
+  input,select,textarea{font-size:16px!important;max-width:100%!important}
+  .note-dir-toggle{bottom:76px!important;left:12px!important}
+  .mobile-toc-btn{bottom:76px!important;right:12px!important}
+  .history-modal{width:95%!important;max-height:90vh!important}
+}
+.note-dir-toggle,.mobile-toc-btn{display:none;position:fixed;z-index:150;width:48px;height:48px;border-radius:50%;background:var(--card-bg);border:1px solid var(--card-border);box-shadow:0 2px 8px rgba(0,0,0,.1);align-items:center;justify-content:center;cursor:pointer;font-size:20px;color:var(--text2);-webkit-tap-highlight-color:transparent;touch-action:manipulation;user-select:none}
+.note-dir-toggle{bottom:80px;left:12px}.mobile-toc-btn{bottom:80px;right:12px}
+/* 2026-10-19 遗留 #14：这两个按钮是手机专用抽屉开关（只在上面 ≤768px 的媒体查询里 display:flex）。
+   themes/base.css 用 `.kb-shell .note-dir-toggle{display:flex!important}` 统一图标样式，
+   带 !important 把桌面端的 display:none 一起压掉了，桌面/横屏也会冒出按钮；
+   点开时抽屉的定位规则同样只在 ≤768px 生效，面板留在文档流里被 z-index:199 的遮罩盖住，
+   表现为整页变灰、看不到目录。这里只在桌面宽度把按钮收回去，手机端表现不变。 */
+@media not all and (max-width:768px){
+  html.kb-shell .note-dir-toggle.note-dir-toggle,html.kb-shell .mobile-toc-btn.mobile-toc-btn{display:none!important}
+  /* 手机端已打开抽屉后拉宽/旋转到桌面宽度：抽屉定位规则失效会留在文档流里被遮罩盖住，
+     这里把遮罩和两个抽屉面板一起收回。只收 .mobile-show 状态，桌面正常侧栏不受影响 */
+  .mobile-overlay.show{display:none!important}
+  #noteDirPanel.mobile-show,#tocPanel.mobile-show{display:none!important}
+}
+.mobile-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:199}
+.mobile-overlay.show{display:block}
+/* v5.6 统计图表 */
+.stat-chart{height:200px;position:relative}
+.stat-bar{position:absolute;bottom:0;background:var(--blue);border-radius:4px 4px 0 0;min-width:8px;transition:height .5s ease}
+.stat-bar:hover{opacity:.8}
+/* ─── 移动端专项（本地化 + 触控/安全区/下拉刷新/结果卡片） ─── */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{overscroll-behavior-y:contain}
+button,a,.mn-item,.sidebar-item,.tag-item,.breadcrumb a{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+/* 下拉刷新指示器 */
+#ptr{position:fixed;top:0;left:0;right:0;height:0;display:flex;align-items:center;justify-content:center;gap:6px;overflow:hidden;font-size:12px;color:var(--text3);background:var(--card-bg);border-bottom:1px solid transparent;z-index:90;transition:height .2s ease;pointer-events:none;padding-top:env(safe-area-inset-top,0px)}
+#ptr.on{height:calc(48px + env(safe-area-inset-top,0px));border-bottom-color:var(--card-border)}
+#ptr .ptr-ico{display:inline-block;transition:transform .2s ease;font-size:15px}
+/* 搜索结果卡片化 */
+.sr-card{display:block;overflow:hidden}
+.sr-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.sr-title{font-weight:600;line-height:1.4;word-break:break-word}
+.sr-badge{flex-shrink:0;font-size:10px;line-height:1.6;padding:2px 8px;border-radius:20px;background:var(--blue-bg);color:var(--blue);font-weight:600;white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
+.sr-path{font-size:11px;color:var(--text4);margin-top:3px;word-break:break-all}
+.sr-snip{font-size:13px;color:var(--text2);background:var(--code-bg);border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.sr-meta{display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--text4)}
+.sr-pct{color:var(--blue);font-weight:600}
+.sr-bar{height:5px;border-radius:3px;background:var(--gray200);margin-top:5px;overflow:hidden}
+.sr-bar>i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),#60a5fa);transition:width .4s ease}
+/* 刘海屏安全区 */
+@supports(padding:max(0px)){
+  header{padding-top:max(10px,env(safe-area-inset-top))}
+  main{padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  #toast-ct{top:max(20px,calc(env(safe-area-inset-top) + 8px));right:max(12px,env(safe-area-inset-right))}
+  .mobile-nav{padding-bottom:max(6px,env(safe-area-inset-bottom))}
+}
+@media(max-width:768px){
+  /* 触控目标 ≥44×44px */
+  button,.mn-item,.tag-item,.sidebar-item,.breadcrumb a{min-height:44px}
+  button{padding-top:8px;padding-bottom:8px}
+  .mn-item{flex:1 1 0;min-width:0;min-height:50px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px 1px 2px}
+  .dark-toggle{min-width:44px;min-height:44px;padding:0}
+  .tag-item{display:inline-flex;align-items:center;padding:8px 12px;font-size:13px}
+  .edit-toolbar button{min-height:44px}
+  .batch-bar button{min-height:44px}
+  input[type="checkbox"]{width:22px;height:22px}
+  .breadcrumb a{display:inline-flex;align-items:center;padding:0 6px}
+  #sr .card{padding:14px}
+}
+@media(max-width:768px){#tab-log .card{overflow-x:auto;-webkit-overflow-scrolling:touch}#tab-log table th,#tab-log table td{padding:6px 5px!important;font-size:11px!important}#tab-log table td{max-width:92px!important}#tab-log table th{white-space:nowrap}}
+@media(max-width:768px){#tab-apidoc table{display:block;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+</style>
+<link rel="stylesheet" href="./vendor/tailwind.build.css">
+<link id="themeCss" rel="stylesheet">
+<link rel="stylesheet" href="./themes/base.css">
+<script>(function(){try{var t=localStorage.getItem("kb_theme")||"aurora";if(t!=="classic"){document.documentElement.setAttribute("data-theme",t);document.documentElement.classList.add("kb-shell");if(t==="console")document.documentElement.classList.add("dark")}var l=document.getElementById("themeCss");if(l&&t!=="classic")l.href="./themes/"+t+".css"}catch(e){}})()</script>
+</head>
+<body class="min-h-screen">
+<div id="toast-ct"></div>
+<div id="ptr" aria-hidden="true"><span class="ptr-ico">↓</span><span id="ptrTxt">下拉刷新</span></div>
+
+<!-- Login -->
+<div id="login" class="flex items-center justify-center min-h-screen" style="background:var(--bg)">
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-8 w-full max-w-md" style="background:var(--card-bg);border-color:var(--card-border)">
+<span class="text-sm bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-medium">FAISS 检索</span>
+<h1 class="text-2xl font-bold text-gray-900 mt-3 mb-1">📚 知识库</h1>
+<p class="text-gray-500 text-sm mb-6">极简白 · PWA离线 · 中文分词 · 打印样式 · 编辑导出</p>
+<div class="flex border-b border-gray-200 mb-6">
+<button onclick="sl('token')" class="flex-1 py-2 text-sm font-medium border-b-2 border-blue-500 text-blue-600 pb-2 login-btn" data-lt="token">🔑 Token登录</button>
+<button onclick="sl('request')" class="flex-1 py-2 text-sm font-medium border-b-2 border-transparent text-gray-400 pb-2 login-btn" data-lt="request">📱 申请访问</button>
+</div>
+<div id="login-token">
+<input id="ti" type="password" autocomplete="off" placeholder="粘贴主Token..." oninput="document.getElementById('tiLen').textContent=this.value.length" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm">
+<div class="text-xs text-gray-400 mb-3"><span id="tiLen">0</span> 字符</div>
+<button onclick="dl()" class="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 font-medium transition">进入面板</button>
+</div>
+<div id="login-rq" class="hidden">
+<input id="rn" placeholder="设备名" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"><select id="rp" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3"><option value="rw">读写权限</option><option value="r">只读权限</option></select><input id="ridLabel" placeholder="来源身份（如 Web/手机/项目名）" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3"><input id="rPlatform" placeholder="平台（可选，如 web/claude/mcp）" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3"><input id="rScope" placeholder="项目范围（可选）" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3"><input id="rDefaultDir" placeholder="默认目录（可选，如 20-知识/工具研究）" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3"><input id="rDefaultTags" placeholder="默认标签（逗号分隔，可选）" class="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3"><button onclick="dr()" id="rb" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg py-3 font-medium transition">📤 提交申请</button></div>
+<div id="login-res" class="hidden mt-4"><div id="lrc" class="bg-gray-50 rounded-lg p-4 text-sm text-gray-700"></div><button onclick="rl()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg py-2 mt-3 text-sm transition">返回</button></div>
+<p id="le" class="text-red-500 text-sm mt-3 hidden"></p>
+<button onclick="lo()" class="w-full text-gray-400 text-xs mt-3 hover:text-gray-600 transition">🔄 清除本地数据</button>
+</div></div>
+
+<!-- Main App -->
+<div id="app" class="hidden">
+<header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+<div class="flex items-center gap-3"><h1 class="text-lg font-bold text-gray-900">📚 知识库</h1></div>
+<div class="flex items-center gap-4 text-sm"><span id="ixs" class="text-gray-400 text-xs"></span><span id="verBadge" class="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-medium cursor-help" title="点击检查技能更新" onclick="checkVersion()"></span><button id="dmt" onclick="toggleDark()" class="dark-toggle" title="切换暗色模式">🌙</button><button onclick="lo()" class="text-gray-400 hover:text-gray-600 transition">退出</button></div>
+</header>
+
+<div class="flex" style="min-height:calc(100vh - 53px)">
+<!-- Sidebar -->
+<nav class="sidebar bg-white border-r border-gray-200 p-4 flex flex-col gap-1 overflow-y-auto" style="background:var(--sidebar-bg);border-color:var(--sidebar-border)">
+<button onclick="st('dash')" class="sidebar-item active flex items-center gap-2 text-gray-700" data-sb="dash"><span>📊</span><span>仪表盘</span></button>
+<button onclick="st('graph')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="graph"><span>🔗</span><span>知识图谱</span></button>
+<button onclick="st('notes')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="notes"><span>📄</span><span>笔记浏览</span></button>
+<button onclick="st('sem')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="sem"><span>🧠</span><span>语义搜索</span></button>
+<button onclick="st('llm')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="llm"><span>🤖</span><span>AI助手</span></button>
+<div class="my-2 border-t border-gray-100"></div>
+<button onclick="st('upload')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="upload"><span>📤</span><span>上传文件</span></button>
+<button onclick="st('auth')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="auth"><span>🔑</span><span>授权管理</span></button>
+<button onclick="st('log')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="log"><span>📋</span><span>审计日志</span></button>
+<button onclick="st('set')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="set"><span>⚙</span><span>系统设置</span></button>
+<div class="my-2 border-t border-gray-100"></div>
+<button onclick="st('market')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="market"><span>🛒</span><span>插件商城</span></button>
+<!-- 2026-10-19 T10：技能 / MCP 已并入「插件商城」，旧入口隐藏；DOM 保留不删（仓库规矩） -->
+<button onclick="st('skills')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="skills" style="display:none"><span>🧩</span><span>技能/MCP</span></button>
+<button onclick="st('apidoc')" class="sidebar-item flex items-center gap-2 text-gray-600" data-sb="apidoc"><span>📖</span><span>API文档</span></button>
+</nav>
+
+<!-- Main Content -->
+<main class="flex-1 p-6 overflow-y-auto">
+<div id="tab-dash"><div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6" id="dc"></div><div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6"><div class="card p-4"><h3 class="text-sm font-semibold text-gray-500 mb-3">📈 笔记趋势 (近12月)</h3><div id="trendChart" class="stat-chart"><span class="text-gray-400 text-xs">加载中...</span></div></div><div class="card p-4"><h3 class="text-sm font-semibold text-gray-500 mb-3">🏷 标签云</h3><div id="tagCloud" class="tag-cloud"><span class="text-gray-400 text-xs">加载中...</span></div></div></div><div id="kbPluginDash" class="space-y-3"></div></div>
+
+<div id="tab-graph" class="hidden">
+<div class="rounded-lg border p-3 mb-3 flex flex-wrap items-center gap-3 text-xs" style="background:var(--card-bg);border-color:var(--card-border)">
+<label class="flex items-center gap-1">语义阈值<input id="gMinSim" type="range" min="0.60" max="0.95" step="0.01" value="0.80" oninput="document.getElementById('gMinSimV').textContent=this.value" onchange="lgRefresh()" style="width:110px"><span id="gMinSimV" class="font-mono text-blue-600">0.80</span></label>
+<label class="flex items-center gap-1">每点最多<input id="gMaxLinks" type="number" min="1" max="20" value="8" class="w-14 border rounded px-1 py-0.5" onchange="lgRefresh()"></label>
+<label class="flex items-center gap-1"><input id="gSem" type="checkbox" onchange="lgRefresh()">语义边</label>
+<label class="flex items-center gap-1"><input id="gWiki" type="checkbox" checked onchange="lgRefresh()">Wiki边</label>
+<label class="flex items-center gap-1"><input id="gAll" type="checkbox" onchange="lgRefresh()">显示全部</label>
+<button onclick="lgRefresh()" class="bg-blue-600 text-white px-3 py-1 rounded">刷新</button>
+<span id="gStat" class="text-gray-400"></span>
+<span id="gLegend" class="ml-auto flex items-center gap-2 text-gray-400 flex-wrap"></span>
+</div>
+<div class="card" style="height:calc(100vh - 230px);min-height:320px"><div id="gc"></div></div>
+</div>
+
+<div id="tab-notes" class="hidden">
+<div class="flex gap-4" style="height:calc(100vh - 180px)">
+<div class="w-56 bg-white rounded-lg border border-gray-200 shadow-sm p-3 overflow-y-auto flex-shrink-0 note-dir-panel" id="noteDirPanel"><h3 class="text-xs font-semibold text-gray-500 mb-2">📂 目录</h3><input id="noteFilter" placeholder="过滤..." oninput="ltD()" class="w-full border border-gray-200 rounded px-2 py-1 text-xs mb-2 focus:outline-none focus:border-blue-400"><div id="nt"></div></div>
+<div class="flex-1 card p-6 overflow-y-auto" id="nv"><p class="text-gray-400">选择左侧笔记查看内容</p></div>
+<div class="w-48 flex-shrink-0 hidden" id="tocPanel"><div class="toc-panel" id="tocContent"><h4>📑 目录</h4></div></div>
+</div>
+<button class="note-dir-toggle" onclick="toggleMobileDir()" id="dirToggleBtn">📂</button>
+<button class="mobile-toc-btn" onclick="toggleMobileToc()" id="tocToggleBtn">📑</button>
+<div class="mobile-overlay" id="mobileOverlay" onclick="closeMobilePanels()"></div>
+<div class="batch-bar" id="batchBar"><span id="batchCount" class="text-sm font-medium text-gray-700"></span><button onclick="bt('tag')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">🏷 批量标签</button><button onclick="bt('archive')" class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 rounded text-sm">📦 批量归档</button><button onclick="bs()" class="bg-gray-200 hover:bg-gray-300 text-gray-600 px-3 py-1 rounded text-sm">取消</button></div>
+</div>
+
+<div id="tab-sem" class="hidden">
+<div class="flex gap-3 mb-6"><input id="sq" placeholder="输入关键词进行语义搜索..." onkeydown="if(event.key==='Enter')dss()" class="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"><button onclick="dss()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition">🧠 搜索</button><button onclick="rbi()" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-3 rounded-lg text-sm transition">🔄 重建索引</button></div>
+<div id="rbiBox" class="hidden rounded-lg border p-3 mb-4 text-xs" style="background:var(--card-bg);border-color:var(--card-border)"></div>
+<div id="srTagBar" class="hidden flex flex-wrap items-center gap-2 mb-3 text-xs"></div>
+<div id="sr" class="space-y-3"></div>
+</div>
+
+<div id="tab-llm" class="hidden">
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<div class="card p-6"><h3 class="text-lg font-semibold text-gray-900 mb-4">💬 知识问答</h3><textarea id="lq" placeholder="基于知识库提问..." class="w-full border border-gray-200 rounded-lg px-4 py-3 mb-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"></textarea><button onclick="la()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition">提问</button><div id="laa" class="mt-4 text-sm bg-gray-50 rounded-lg p-4 hidden"></div></div>
+<div class="card p-6"><h3 class="text-lg font-semibold text-gray-900 mb-4">🏷 智能标签 / 新建笔记</h3><textarea id="lt" placeholder="输入内容推荐标签，或开头加 #标题 直接新建笔记..." class="w-full border border-gray-200 rounded-lg px-4 py-3 mb-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"></textarea><div class="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3"><select id="noteType" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><option value="knowledge">知识</option><option value="project">项目</option><option value="writing">写作</option><option value="diary">日记</option></select><select id="noteTemplate" onchange="applyTemplate()" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><option value="">模板（可选）</option></select><input id="noteSubdir" placeholder="子目录（可选）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><input id="noteTags" placeholder="标签（逗号分隔）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><input id="noteRelations" placeholder="关联（逗号分隔）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"></div><div class="flex gap-2"><button onclick="ltgOrCreate()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition">提交</button><button onclick="document.getElementById('lt').value=''" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm transition">清空</button></div><div id="ltr" class="mt-4 flex gap-2 flex-wrap"></div></div>
+</div>
+
+<!-- 智能文档分析 -->
+<div class="card p-6 mt-6">
+<h3 class="text-lg font-semibold text-gray-900 mb-2">📄 智能文档分析</h3>
+<p class="text-sm text-gray-500 mb-4">粘贴Markdown文档，AI会分析是否与已有笔记重复，建议创建新笔记还是更新已有笔记</p>
+<input id="smartTitle" placeholder="标题（可选，不填则从 Markdown # 标题提取）" class="w-full border border-gray-200 rounded-lg px-4 py-2 mb-3 text-sm">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3"><select id="smartType" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><option value="">自动判断类型</option><option value="knowledge">知识</option><option value="project">项目</option><option value="writing">写作</option><option value="diary">日记</option></select><input id="smartSubdir" placeholder="子目录（可选）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><input id="smartTags" placeholder="标签（逗号分隔，可选）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"><input id="smartRelations" placeholder="关联（逗号分隔，可选）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+<textarea id="smartDoc" placeholder="粘贴完整的 Markdown 文档..." class="w-full border border-gray-200 rounded-lg px-4 py-3 mb-3 h-32 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"></textarea>
+<div class="flex gap-2 mb-4">
+<button onclick="smartUpload()" id="smartBtn" class="bg-violet-600 hover:bg-violet-700 text-white px-6 py-2 rounded-lg font-medium transition">📤 智能上传（自动分析+去重）</button>
+<button onclick="document.getElementById('smartDoc').value='';document.getElementById('smartResult').classList.add('hidden')" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm transition">清空</button>
+</div>
+<div id="smartResult" class="hidden bg-gray-50 rounded-lg p-4 text-sm"></div>
+</div></div>
+
+<div id="tab-upload" class="hidden">
+<div class="max-w-2xl">
+<div class="card p-6 mb-4"><h3 class="text-lg font-semibold text-gray-900 mb-4">📤 上传文件</h3>
+<div id="dropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition" onclick="document.getElementById('fileInput').click()" ondragover="event.preventDefault();this.classList.add('border-blue-400','bg-blue-50/50')" ondragleave="this.classList.remove('border-blue-400','bg-blue-50/50')" ondrop="event.preventDefault();this.classList.remove('border-blue-400','bg-blue-50/50');if(event.dataTransfer.files.length)handleFiles(event.dataTransfer.files)">
+<input type="file" id="fileInput" class="hidden" onchange="if(this.files.length)handleFiles(this.files)">
+<div class="text-4xl mb-2">📁</div><p class="text-gray-500 text-sm">点击或拖拽上传</p><p class="text-gray-400 text-xs mt-1">支持 md/txt/json/yaml/py/png/jpg/jpeg/gif/webp/svg/pdf/html/css/js/ts</p></div>
+<div id="fileInfo" class="hidden mt-4 p-3 bg-gray-50 rounded-lg text-sm"><span id="fileName"></span><span id="fileSize" class="text-gray-400 ml-2"></span></div></div>
+<div class="card p-6"><div class="flex gap-2 flex-wrap mb-4"><select id="uploadType" class="w-36 border border-gray-200 rounded-lg px-3 py-2 text-sm"><option value="">自动类型</option><option value="project">项目</option><option value="knowledge">知识</option><option value="writing">写作</option><option value="diary">日记</option></select><select id="uploadDir" class="w-48 border border-gray-200 rounded-lg px-3 py-2 text-sm"><option value="_assets">全局 _assets</option><option value="10-项目/_assets">项目 _assets</option><option value="20-知识/_assets">知识 _assets</option><option value="30-写作/_assets">写作 _assets</option><option value="50-档案/_assets">档案 _assets</option></select></div><button onclick="doUpload()" id="upBtn" class="bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 px-6 font-medium transition disabled:opacity-50" disabled>📤 选择文件后上传</button><div id="uploadResult" class="mt-4 hidden"></div></div>
+</div></div>
+
+<div id="tab-auth" class="hidden">
+<div class="card p-6 mb-6">
+<h3 class="text-lg font-semibold text-gray-900 mb-4">➕ 手动添加 Token</h3>
+<div class="grid grid-cols-1 md:grid-cols-5 gap-3 text-sm">
+<input id="tokName" placeholder="Token 名称 / 平台" class="border border-gray-200 rounded-lg px-3 py-2">
+<input id="tokDevice" placeholder="设备 / 项目" class="border border-gray-200 rounded-lg px-3 py-2">
+<select id="tokPerm" class="border border-gray-200 rounded-lg px-3 py-2"><option value="r">只读</option><option value="rw">读写</option></select>
+<input id="tokTtl" placeholder="有效期分钟(如 43200=30天 / 525600=1年)" class="border border-gray-200 rounded-lg px-3 py-2">
+<button onclick="createToken()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">创建 Token</button>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm mt-3">
+<input id="tokIdentity" placeholder="来源身份" class="border border-gray-200 rounded-lg px-3 py-2">
+<input id="tokPlatform" placeholder="平台" class="border border-gray-200 rounded-lg px-3 py-2">
+<input id="tokScope" placeholder="项目范围" class="border border-gray-200 rounded-lg px-3 py-2">
+<input id="tokDefaultDir" placeholder="默认目录" class="border border-gray-200 rounded-lg px-3 py-2">
+</div>
+<input id="tokDefaultTags" placeholder="默认标签（逗号分隔）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm mt-3 w-full">
+<input id="tokNote" placeholder="备注（可选）" class="border border-gray-200 rounded-lg px-3 py-2 text-sm mt-3 w-full">
+<div id="issuedToken" class="hidden mt-4"></div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<div class="card p-6"><h3 class="text-lg font-semibold text-gray-900 mb-4">⏳ 待审批</h3><div id="pr" class="space-y-3 text-sm"></div></div>
+<div class="card p-6"><h3 class="text-lg font-semibold text-gray-900 mb-4">🟢 活跃会话</h3><div id="as" class="space-y-3 text-sm"></div></div>
+</div></div>
+
+<div id="tab-log" class="hidden">
+<div class="mb-3 flex gap-2 items-center flex-wrap" id="logCats">
+  <button type="button" class="log-cat is-on" data-cat="" data-label="全部" onclick="llCat('')">全部</button>
+  <button type="button" class="log-cat" data-cat="read" data-label="读操作" onclick="llCat('read')">读操作</button>
+  <button type="button" class="log-cat" data-cat="write" data-label="写操作" onclick="llCat('write')">写操作</button>
+  <button type="button" class="log-cat" data-cat="auth" data-label="认证" onclick="llCat('auth')">认证</button>
+  <button type="button" class="log-cat" data-cat="system" data-label="系统" onclick="llCat('system')">系统</button>
+</div>
+<div class="mb-4 flex gap-3 items-center flex-wrap"><span class="text-sm text-gray-500">操作:</span><select id="logAct" onchange="ll(1)" class="border border-gray-200 rounded px-3 py-1 text-sm"><option value="">全部</option></select><span class="text-sm text-gray-500">设备:</span><input id="logDev" placeholder="过滤..." onkeydown="if(event.key==='Enter')ll(1)" class="border border-gray-200 rounded px-3 py-1 text-sm w-32"><button onclick="ll(1)" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1 rounded text-sm transition">刷新</button><button type="button" onclick="logCleanOpen()" class="ml-auto log-danger">清理日志</button></div>
+<div id="logStats" class="mb-4 grid grid-cols-3 gap-3 text-sm"></div>
+<div id="logCount" class="mb-2 text-xs text-gray-500"></div>
+<div class="card overflow-hidden"><table class="w-full text-sm"><thead><tr class="bg-gray-50 text-gray-500"><th class="p-3 text-left">时间</th><th class="p-3 text-left">操作</th><th class="p-3 text-left">路径</th><th class="p-3 text-left">设备/IP</th><th class="p-3 text-left">状态</th></tr></thead><tbody id="logBody"></tbody></table></div>
+<div id="logPg" class="flex justify-center mt-4"></div>
+</div>
+
+<div class="history-modal card p-6 hidden" id="logCleanMdl">
+  <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-semibold">🧹 清理审计日志</h3><button type="button" onclick="logCleanClose()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button></div>
+  <div class="space-y-3 text-sm">
+    <div class="log-warn">删除后不可恢复。当前共 <b id="logCleanTotal">-</b> 条。</div>
+    <div class="flex gap-2 items-center flex-wrap">
+      <span>删除范围：</span>
+      <select id="logCleanDays" class="border border-gray-200 rounded px-3 py-1" onchange="logCleanPreview()">
+        <option value="7">7 天前</option>
+        <option value="30">30 天前</option>
+        <option value="90">90 天前</option>
+        <option value="all">全部记录</option>
+      </select>
+      <span id="logCleanWill" class="text-gray-600">正在计算…</span>
+    </div>
+    <label class="flex items-start gap-2 cursor-pointer">
+      <input type="checkbox" id="logCleanBackup" class="mt-0.5">
+      <span>删除前导出备份<span class="block text-xs text-gray-500">勾选则先把待删记录导出成 JSON 存到 _assets/，不勾选直接删</span></span>
+    </label>
+    <div class="flex justify-end gap-2 pt-2">
+      <button type="button" onclick="logCleanClose()" class="px-4 py-1.5 rounded bg-gray-100 text-gray-700">取消</button>
+      <button type="button" id="logCleanGo" onclick="logCleanRun()" class="px-4 py-1.5 rounded bg-red-600 text-white">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<div id="tab-set" class="hidden">
+<div class="card p-6 max-w-2xl"><h3 class="text-lg font-semibold text-gray-900 mb-4">⚙ 系统设置</h3>
+<div class="space-y-4" id="sf"></div>
+<button onclick="sv()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium mt-4 transition">💾 保存设置</button>
+</div>
+<!-- 2026-10-19 遗留 #15：插件单独一组（标题 + 卡片），挂载点 id 不变，插件照旧注入这里 -->
+<div class="set-group set-group-plugin"><div class="set-group-head">插件</div><div id="kbPluginSettings" class="space-y-3 set-plugin-box"></div></div>
+</div>
+
+<!-- 2026-10-19 T10：旧「技能 / MCP」页已并入插件商城（#marketSkills / #marketMcp）。
+     容器保留、display:none，不真删 DOM；功能见 app.js 的 lmarketSkills()。 -->
+<div id="tab-skills" class="hidden" style="display:none">
+<div class="card p-6 max-w-5xl">
+  <div class="flex items-center justify-between mb-4">
+    <div><h3 class="text-lg font-semibold text-gray-900">🧩 技能 / MCP 分享中心</h3><p class="text-xs text-gray-500 mt-1">第一阶段仅提供 manifest、只读 MCP 配置预览和敏感扫描报告；不导出完整 skills、私有数据库、日志、settings 或真实 token。</p></div>
+    <button onclick="lsk()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">刷新预览</button>
+  </div>
+  <div id="skillsList" class="space-y-3"></div>
+</div></div>
+
+<div id="tab-mcp" class="hidden" style="display:none"></div>
+<!-- 上一行：MCP 用量原为仪表盘卡片、无独立 tab；此占位只为保留旧入口锚点，不承载渲染 -->
+<div id="tab-market" class="hidden">
+<div class="card p-6 max-w-5xl">
+  <div class="flex items-center justify-between mb-4">
+    <div><h3 class="text-lg font-semibold text-gray-900">🛒 插件商城</h3><p class="text-xs text-gray-500 mt-1">插件只能改界面，不执行后端逻辑；启停状态记在知识库根目录的 .kb_plugins.json。</p></div>
+    <button onclick="lmarket()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">刷新</button>
+  </div>
+  <div class="space-y-3" id="marketBlocks">
+    <div class="card p-4">
+      <h4 class="font-semibold text-gray-800 mb-2">已装插件</h4>
+      <p class="text-xs text-gray-500 mb-3">插件目录：web/plugins/&lt;名字&gt;/manifest.json，可挂载到 dash、note-detail、settings 三处。开关需要主 Token。</p>
+      <div id="marketPlugins" class="space-y-3"><span class="text-gray-400 text-xs">加载中...</span></div>
+    </div>
+    <div class="card p-4">
+      <h4 class="font-semibold text-gray-800 mb-2">主题</h4>
+      <p class="text-xs text-gray-500 mb-3">点击即切换，与右上角主题按钮是同一套机制，切换后页面会重新加载。</p>
+      <div id="marketThemes" class="space-y-3"><span class="text-gray-400 text-xs">加载中...</span></div>
+    </div>
+    <div class="card p-4">
+      <h4 class="font-semibold text-gray-800 mb-2">文档模板</h4>
+      <p class="text-xs text-gray-500 mb-3">来自笔记库 _模板/ 目录，仅展示，新建笔记时选模板在后续版本提供。</p>
+      <div id="marketTemplates" class="space-y-3"><span class="text-gray-400 text-xs">加载中...</span></div>
+    </div>
+    <div class="card p-4">
+      <h4 class="font-semibold text-gray-800 mb-2">本地导入 / 新建插件</h4>
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-700">
+        <p class="font-medium">当前版本仅支持把插件目录放到 <span class="font-mono text-xs">web/plugins/&lt;name&gt;/</span> 下，页面导入需后续版本。</p>
+        <p class="text-xs mt-2">本页不提供上传与安装按钮，也不做任何安装动作；放好目录后在「已装插件」里刷新即可看到。</p>
+      </div>
+    </div>
+  </div>
+</div></div>
+<div id="tab-apidoc" class="hidden"><div class="card p-6 max-w-3xl" id="apidocContent"><h3 class="text-lg font-semibold text-gray-900 mb-4">📖 API 文档</h3><div id="adBody"></div></div></div>
+</main>
+</div>
+</div>
+
+<script src="/web/app.js"></script>
+<script src="/web/ui.js?v=1.3.0"></script>
+<script src="/web/plugins-loader.js?v=1.4.0"></script>
+
+<div class="history-overlay hidden" id="histOvl" onclick="hcl()"></div>
+<div class="history-modal card p-6 hidden" id="histMdl"><div class="flex justify-between items-center mb-4"><h3 class="text-lg font-semibold">📜 版本历史</h3><button onclick="hcl()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button></div><div id="histContent"></div></div>
+<!-- v5.6 移动端底部导航 -->
+<nav class="mobile-nav" id="mobileNav">
+<div class="mn-item active" onclick="st('dash')" data-mn="dash"><span>📊</span>总览</div>
+<div class="mn-item" onclick="st('graph')" data-mn="graph"><span>🔗</span>图谱</div>
+<div class="mn-item" onclick="st('notes')" data-mn="notes"><span>📄</span>笔记</div>
+<div class="mn-item" onclick="st('sem')" data-mn="sem"><span>🔍</span>搜索</div>
+<div class="mn-item" onclick="st('llm')" data-mn="llm"><span>🤖</span>AI</div>
+<div class="mn-item" onclick="st('upload')" data-mn="upload"><span>📤</span>上传</div>
+<div class="mn-item" onclick="st('auth')" data-mn="auth"><span>🔑</span>授权</div>
+<div class="mn-item" onclick="st('log')" data-mn="log"><span>📋</span>日志</div>
+<div class="mn-item" onclick="st('set')" data-mn="set"><span>⚙</span>设置</div>
+<div class="mn-item" onclick="st('skills')" data-mn="skills" style="display:none"><span>🧩</span>技能</div>
+</nav>
+</body>
+</html>

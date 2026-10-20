@@ -1,0 +1,173 @@
+name: Release
+
+# 第 10 项：config.py 的 VERSION 变更合入 main → 自动打 tag → 跑测试与密钥扫描
+# → 按白名单打包 → 用 CHANGELOG 对应段落建 GitHub Release。
+# 与第 9 项配套：生产只从这个 Release 包部署，不再 git pull。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 打 tag 并发布 Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 读取 VERSION 并判断是否需要发版
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          VER=$(python -c "import re,pathlib;print(re.search(r'^VERSION = \"([^\"]+)\"', pathlib.Path('scripts/kb_lib/config.py').read_text(encoding='utf-8'), re.M).group(1))")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          TAG="v$VER"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # 只有「tag 已存在」且「Release 也已存在」才算真正发过版。
+          # 若 tag 推成功但 gh release create 失败，重跑时 tag 在、Release 不在，
+          # 必须继续往下走把 Release 补出来，不能被 tag 挡死。
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "tag 与 Release 均已存在（$TAG），本次不发版"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "tag $TAG 已存在但 Release 缺失，补建 Release"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "准备发布 $TAG"
+          fi
+
+      - name: 安装依赖
+        if: steps.ver.outputs.skip == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-optional.txt
+          pip install -r requirements-dev.txt
+
+      - name: 语法编译检查
+        if: steps.ver.outputs.skip == 'false'
+        run: python -m compileall -q scripts tests
+
+      - name: 版本一致性
+        if: steps.ver.outputs.skip == 'false'
+        run: python scripts/test_version_consistency.py
+
+      - name: 单元测试
+        if: steps.ver.outputs.skip == 'false'
+        run: python -m pytest tests/ -q
+
+      - name: 密钥扫描
+        if: steps.ver.outputs.skip == 'false'
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz \
+            | tar -xz gitleaks
+          ./gitleaks git . --redact -v
+          python3 scripts/ci/guard.py all
+
+      - name: 按白名单打包
+        if: steps.ver.outputs.skip == 'false'
+        id: pack
+        run: |
+          set -e
+          VER="${{ steps.ver.outputs.version }}"
+          # 白名单：只打代码、测试、文档、规格与依赖清单。
+          # 不含 .github（CI 配置）、.githooks（本地钩子）、笔记与任何运行期状态。
+          ALLOW="scripts tests docs _spec README.md CHANGELOG.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md LICENSE requirements.txt requirements-optional.txt requirements-dev.txt .env.example .gitignore"
+          rm -rf /tmp/pkg && mkdir -p /tmp/pkg/kb-$VER
+          for item in $ALLOW; do
+            if [ -e "$item" ]; then
+              cp -r "$item" /tmp/pkg/kb-$VER/
+            else
+              echo "⚠ 白名单项不存在，跳过：$item"
+            fi
+          done
+
+          # 打包后自检：包内每个路径都必须在白名单内，多一个就失败
+          ( cd /tmp/pkg/kb-$VER && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | sort ) > /tmp/got.txt
+          for item in $ALLOW; do [ -e "$item" ] && echo "$item"; done | sort > /tmp/want.txt
+          if ! diff -q /tmp/want.txt /tmp/got.txt >/dev/null; then
+            echo "❌ 包内顶层条目与白名单不一致："
+            diff /tmp/want.txt /tmp/got.txt || true
+            exit 1
+          fi
+
+          # 包里绝不能出现个人数据与密钥类文件
+          if find /tmp/pkg -type f | grep -E '/(笔记|00-索引|_assets|10-项目|50-档案)/|\.api_tokens\.json|\.kb_settings\.json|\.audit\.db|\.env$' ; then
+            echo "❌ 包里出现不该发布的文件"
+            exit 1
+          fi
+
+          tar -C /tmp/pkg -czf "/tmp/kb-$VER.tar.gz" "kb-$VER"
+          echo "artifact=/tmp/kb-$VER.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "—— 包内顶层 ——"; cat /tmp/got.txt
+          echo "—— 包大小 ——"; ls -lh "/tmp/kb-$VER.tar.gz"
+
+      - name: 从 CHANGELOG 取发行说明
+        if: steps.ver.outputs.skip == 'false'
+        id: notes
+        run: |
+          set -e
+          VER="${{ steps.ver.outputs.version }}"
+          git log -30 --pretty='- %s' > /tmp/commits.txt
+          python - "$VER" <<'PY' > /tmp/notes.md
+          import re, sys, pathlib
+          ver = sys.argv[1]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          # 优先找带版本号的标题段（## 1.2.3 / ## v1.2.3 / ## [1.2.3]）；
+          # 没有就退化成「本次发布包含的提交」，不让发版因为 CHANGELOG 没写版本号而卡住。
+          # 结尾必须锚定，否则发 1.0.1 时会误匹配 ## 1.0.10 这类段落。
+          m = re.search(rf"^##\s*\[?v?{re.escape(ver)}\]?\s*$", text, re.M)
+          if m:
+              nxt = re.search(r"^##\s", text[m.end():], re.M)
+              body = text[m.start(): m.end() + (nxt.start() if nxt else len(text))]
+              print(body.strip())
+          else:
+              print(f"## {ver}\n")
+              print("CHANGELOG 中暂无该版本段落，以下为本次发布包含的提交：\n")
+              print("```")
+              print(pathlib.Path("/tmp/commits.txt").read_text(encoding="utf-8").strip())
+              print("```")
+          PY
+          echo "—— 发行说明 ——"
+          cat /tmp/notes.md
+
+      - name: 打 tag 并创建 Release
+        if: steps.ver.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.ver.outputs.tag }}"
+          git config user.name "lingshu-release-bot"
+          git config user.email "lingshu@users.noreply.github.com"
+          # tag 可能已存在（上次 tag 推成功但 Release 失败），此时只补 Release，不重复打 tag
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "tag $TAG 已存在，跳过打 tag"
+          else
+            git tag -a "$TAG" -m "release $TAG"
+            git push origin "$TAG"
+          fi
+          gh release create "$TAG" "${{ steps.pack.outputs.artifact }}" \
+            --title "$TAG" --notes-file /tmp/notes.md
+          echo "✅ 已发布 $TAG"

@@ -1,0 +1,17 @@
+#!/bin/bash
+# lingxi pre-commit：gitleaks 扫暂存内容 + 路径/内容闸（与 CI 同一份规则 scripts/ci/guard.py）
+# 绕过（仅限明确知情）：git commit --no-verify —— 但 CI 的 guard 是必过检查，绕过也合不进 main。
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)"
+fail=0
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks git --pre-commit --staged --redact --no-banner . >/tmp/.gl-pre-commit.out 2>&1; then
+    echo "❌ gitleaks 在暂存内容里发现疑似密钥："; grep -E 'RuleID|File|Line' /tmp/.gl-pre-commit.out | head -20; fail=1
+  fi
+else
+  echo "⚠ 本机没装 gitleaks，跳过密钥扫描（CI 仍会扫）"
+fi
+# 路径与内容闸：检查「提交后的」受跟踪文件集合
+python3 scripts/ci/guard.py paths || fail=1
+python3 scripts/ci/guard.py content || fail=1
+exit $fail

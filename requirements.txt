@@ -1,0 +1,25 @@
+# 知识库运行依赖（版本锁定）
+#
+# 安装：pip install -r requirements.txt
+#
+# 划分说明：
+#   · 本文件 = 必需依赖。装完即可启动，默认 BM25 关键词检索，无需任何外部服务。
+#   · requirements-optional.txt = 向量检索（FAISS 加速、sklearn 降级）。
+#     不装也能跑，检索自动走纯关键词模式。
+#   · requirements-dev.txt = 测试与开发工具。
+#
+# Python 建议 3.10+（kb-mcp-sse 建议 3.11+）。
+
+# Web 框架与 WSGI 服务
+Flask==3.1.3
+Werkzeug==3.1.6
+Jinja2==3.1.6
+waitress==3.0.2
+
+# 检索与数值计算
+numpy==2.2.6
+rank-bm25==0.2.2
+jieba==0.42.1
+
+# MCP 服务
+fastmcp==3.2.3

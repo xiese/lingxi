@@ -1,0 +1,6 @@
+# 开发与测试依赖
+#
+# 安装：pip install -r requirements-dev.txt
+# 测试：python3 -m pytest tests/ -q
+
+pytest==9.1.1

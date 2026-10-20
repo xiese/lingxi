@@ -1,0 +1,24 @@
+[Unit]
+Description=知识库 REST API 服务
+After=network.target
+
+[Service]
+Type=simple
+# 建议用非 root 专用账号运行；若确实要用 root，请自行评估风险
+User=root
+# ↓↓↓ 部署前改成你的实际仓库路径 ↓↓↓
+WorkingDirectory=/srv/knowledge-base
+ExecStart=/usr/bin/python3 /srv/knowledge-base/scripts/kb-server.py
+Restart=always
+RestartSec=5
+Environment=KB_ROOT=/srv/knowledge-base
+# 默认只监听本机；确需对外提供服务时改成 0.0.0.0，并配置反向代理与 HTTPS
+Environment=KB_HOST=127.0.0.1
+Environment=KB_PORT=8899
+
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

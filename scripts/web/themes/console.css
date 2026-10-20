@@ -1,0 +1,254 @@
+/* name: 控制台 | desc: 暗色 · 等宽字体 · 热力图 */
+/* ═════════ 主题 B · 控制台 ═════════ */
+html.kb-shell[data-theme=console]{
+  --bg:#0d1117;--card-bg:#161b22;--card-border:#30363d;--text:#e6edf3;--text2:#c9d1d9;--text3:#8b949e;--text4:#6e7681;
+  --blue:#58a6ff;--blue-bg:rgba(31,111,235,.15);--blue-text:#79c0ff;--hover:#1f242c;--code-bg:#0d1117;--code-text:#ff7b72;
+  --th-bg:#161b22;--scroll-track:#0d1117;--scroll-thumb:#30363d;--sidebar-bg:#010409;--sidebar-border:#21262d;
+  --shadow:transparent;--input-bg:#0d1117;--input-border:#30363d;--gray50:#161b22;--gray100:#21262d;--gray200:#30363d;
+  --k-accent:#238636;--k-hero:#161b22;--k-know:transparent;--k-ai:transparent;--k-sys:transparent;
+  --k-fab-shadow:rgba(46,160,67,.45);--k-blue:#58a6ff;--k-green:#3fb950;
+  --mono:"JetBrains Mono","Cascadia Code","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  color-scheme:dark;
+}
+
+.kb-shell[data-theme=console] body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+
+.kb-shell[data-theme=console] .kb-prompt{display:block}
+
+.kb-shell[data-theme=console] .kb-logo{background:transparent;border:1px solid #30363d;color:#3fb950}
+
+.kb-shell[data-theme=console] .kb-hbtn:hover{background:#1f242c}
+
+/* tailwind 浅色类在暗色下兜底 */
+.kb-shell[data-theme=console] .bg-white,.kb-shell[data-theme=console] .bg-gray-50,.kb-shell[data-theme=console] .bg-slate-50{background:var(--card-bg)!important}
+
+.kb-shell[data-theme=console] .bg-gray-100,.kb-shell[data-theme=console] .bg-gray-200{background:#21262d!important;color:var(--text2)!important}
+
+.kb-shell[data-theme=console] .hover\:bg-gray-50:hover,.kb-shell[data-theme=console] .hover\:bg-gray-100:hover,.kb-shell[data-theme=console] .hover\:bg-gray-200:hover{background:#30363d!important}
+
+.kb-shell[data-theme=console] .text-gray-900,.kb-shell[data-theme=console] .text-gray-800{color:var(--text)!important}
+
+.kb-shell[data-theme=console] .text-gray-700,.kb-shell[data-theme=console] .text-gray-600,.kb-shell[data-theme=console] .text-slate-700,.kb-shell[data-theme=console] .text-slate-600{color:var(--text2)!important}
+
+.kb-shell[data-theme=console] .text-gray-500{color:var(--text3)!important}.kb-shell[data-theme=console] .text-gray-400{color:var(--text4)!important}
+
+.kb-shell[data-theme=console] .border-gray-100,.kb-shell[data-theme=console] .border-gray-200,.kb-shell[data-theme=console] .border-gray-300,.kb-shell[data-theme=console] .border-slate-200{border-color:var(--card-border)!important}
+
+.kb-shell[data-theme=console] .text-blue-600,.kb-shell[data-theme=console] .text-blue-500{color:#58a6ff!important}
+
+.kb-shell[data-theme=console] .text-emerald-600,.kb-shell[data-theme=console] .text-emerald-700{color:#3fb950!important}
+
+.kb-shell[data-theme=console] .text-violet-600{color:#bc8cff!important}.kb-shell[data-theme=console] .text-amber-600,.kb-shell[data-theme=console] .text-amber-500{color:#d29922!important}
+
+.kb-shell[data-theme=console] .text-rose-600,.kb-shell[data-theme=console] .text-red-500,.kb-shell[data-theme=console] .text-red-600{color:#ff7b72!important}
+
+.kb-shell[data-theme=console] .bg-blue-50,.kb-shell[data-theme=console] .bg-blue-50\/50{background:rgba(31,111,235,.12)!important}
+
+.kb-shell[data-theme=console] .bg-emerald-50{background:rgba(46,160,67,.12)!important}.kb-shell[data-theme=console] .bg-amber-50,.kb-shell[data-theme=console] .bg-amber-100{background:rgba(187,128,9,.15)!important}
+
+.kb-shell[data-theme=console] .bg-red-50{background:rgba(248,81,73,.12)!important}
+
+.kb-shell[data-theme=console] .bg-blue-600{background:#1f6feb!important}.kb-shell[data-theme=console] .bg-emerald-600{background:#238636!important}
+
+.kb-shell[data-theme=console] .bg-violet-600{background:#8957e5!important}
+
+.kb-shell[data-theme=console] input,.kb-shell[data-theme=console] select,.kb-shell[data-theme=console] textarea{background:var(--input-bg)!important;color:var(--text)!important;border-color:var(--input-border)!important}
+
+.kb-shell[data-theme=console] input:focus,.kb-shell[data-theme=console] textarea:focus,.kb-shell[data-theme=console] select:focus{border-color:#1f6feb!important;box-shadow:0 0 0 3px rgba(31,111,235,.3)!important;outline:none}
+
+.kb-shell[data-theme=console] #app>header{background:#010409!important;border-color:#21262d!important}
+
+.kb-shell[data-theme=console] .card{border-radius:10px;box-shadow:none}
+
+.kb-shell[data-theme=console] .sidebar-item.active{background:#1f242c;color:var(--text);box-shadow:inset 3px 0 0 #f78166}
+
+.kb-shell[data-theme=console] .kb-sb-h{font-family:var(--mono);font-weight:400}
+
+.kb-shell[data-theme=console] .kb-sb-h:before{content:"// "}
+
+.kb-shell[data-theme=console] .kb-sub-t{font-size:20px}
+
+.kb-shell[data-theme=console] .kb-seg button{border-radius:8px;background:transparent}
+
+.kb-shell[data-theme=console] .kb-seg button.on{background:rgba(31,111,235,.15);border-color:#1f6feb;color:#58a6ff}
+
+.kb-shell[data-theme=console] .kb-hero{border:1px solid #30363d;color:var(--text);padding:16px}
+
+.kb-shell[data-theme=console] .kb-hero-pr{display:block;font-family:var(--mono);font-size:12px;color:var(--text4);margin-bottom:6px}
+
+.kb-shell[data-theme=console] .kb-hero-pr b{color:#3fb950;font-weight:400}.kb-shell[data-theme=console] .kb-hero-pr i{color:#58a6ff;font-style:normal}
+
+.kb-shell[data-theme=console] .kb-hero-hi{font-size:18px}
+
+.kb-shell[data-theme=console] .kb-hero-sub{color:var(--text3);opacity:1}
+
+.kb-shell[data-theme=console] .kb-hero-sub b{font-family:var(--mono);color:#3fb950}
+
+.kb-shell[data-theme=console] .kb-hero-search{background:#0d1117;border-color:#30363d;color:var(--text4);font-family:var(--mono);font-size:13px}
+
+.kb-shell[data-theme=console] .kb-hero-search:after{content:"/";margin-left:auto;border:1px solid #30363d;border-radius:5px;padding:0 6px;font-size:11px}
+
+.kb-shell[data-theme=console] #dc>.card .text-3xl,.kb-shell[data-theme=console] #dc .text-xl{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] .kb-hub-g{border-radius:10px}
+
+.kb-shell[data-theme=console] .kb-hub-t{font-family:var(--mono);font-size:12px;font-weight:400;color:var(--text4)}
+
+.kb-shell[data-theme=console] .kb-hub-t span:before{content:"// "}
+
+.kb-shell[data-theme=console] .kb-tile{border:1px solid #21262d;background:#0d1117;border-radius:10px}
+
+.kb-shell[data-theme=console] .kb-tile-ic{width:28px;height:28px;background:transparent!important}
+
+.kb-shell[data-theme=console] .kb-g-know .kb-tile-ic{color:#58a6ff}.kb-shell[data-theme=console] .kb-g-ai .kb-tile-ic{color:#bc8cff}.kb-shell[data-theme=console] .kb-g-sys .kb-tile-ic{color:#f0883e}
+
+.kb-shell[data-theme=console] .kb-tile-d{display:none}
+
+.kb-shell[data-theme=console] .kb-heat-card{display:block;margin-bottom:16px}
+
+.kb-shell[data-theme=console] .kb-heat-card small{font-family:var(--mono);font-weight:400;color:var(--text4);float:right}
+
+.kb-shell[data-theme=console] .stat-bar{background:#26a641}
+
+.kb-shell[data-theme=console] .tag-item{background:#0d1117;border-color:#30363d;color:#58a6ff;font-family:var(--mono)}
+
+.kb-shell[data-theme=console] .sr-badge{background:rgba(31,111,235,.15);color:#58a6ff;font-family:var(--mono)}
+
+.kb-shell[data-theme=console] .sr-path,.kb-shell[data-theme=console] .sr-pct{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] .sr-title{color:#58a6ff}
+
+.kb-shell[data-theme=console] .sr-bar>i{background:#3fb950}
+
+.kb-shell[data-theme=console] mark.hl{background:rgba(187,128,9,.25);color:#e3b341}
+
+.kb-shell[data-theme=console] #tab-log table,.kb-shell[data-theme=console] #tab-log td{font-family:var(--mono);font-size:12px}
+
+.kb-shell[data-theme=console] #tab-log thead tr{background:#0d1117!important}
+
+.kb-shell[data-theme=console] #tab-log tr{border-color:#21262d!important}
+
+.kb-shell[data-theme=console] .note-content h2{color:#58a6ff}
+
+.kb-shell[data-theme=console] .note-content pre,.kb-shell[data-theme=console] .note-content code{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] .kb-nav{background:#010409;border-color:#21262d}
+
+.kb-shell[data-theme=console] .kb-nav .mn-item.active{color:#3fb950}
+
+.kb-shell[data-theme=console] .kb-fab{border-radius:14px;border:1px solid #2ea043}
+
+.kb-shell[data-theme=console] .kb-sheet{background:#161b22;border-top:1px solid #30363d}
+
+.kb-shell[data-theme=console] .kb-act,.kb-shell[data-theme=console] .kb-theme{background:#0d1117}
+
+.kb-shell[data-theme=console] .toast{border-radius:8px;font-family:var(--mono);font-size:13px}
+
+.kb-shell[data-theme=console] #gc svg text{fill:#c9d1d9}
+
+.kb-shell[data-theme=console] .kb-hero-pr{display:none}
+
+html.kb-shell[data-theme=console]{--c-in:#0d1117;--c-in-b:#30363d;--c-pri:#238636;--c-pri-sh:none;--c-sec:#21262d;--c-sec-fg:#c9d1d9;--c-sec-b:#30363d;--c-ring:rgba(31,111,235,.45);--c-r:6px;--c-acc:#2ea043;--c-h:#e6edf3;--c-sub:#0d1117}
+
+/* ═════════ 控制台专属细节 ═════════ */
+.kb-shell[data-theme=console] main .card h3.text-lg:before,.kb-shell[data-theme=console] main .card>h3:before{content:"##";font-family:var(--mono);color:#6e7681;font-weight:400;margin-right:2px}
+
+.kb-shell[data-theme=console] main .card h3.text-lg,.kb-shell[data-theme=console] main .card>h3{font-size:15px!important}
+
+.kb-shell[data-theme=console] main button.bg-blue-600,.kb-shell[data-theme=console] main button.bg-violet-600,.kb-shell[data-theme=console] #login button.bg-blue-600{border-color:rgba(240,246,252,.1)!important}
+
+.kb-shell[data-theme=console] main button.bg-gray-100:hover,.kb-shell[data-theme=console] main button.bg-gray-200:hover{background:#30363d!important;border-color:#8b949e!important}
+
+.kb-shell[data-theme=console] main button.bg-emerald-600{background:#238636!important}
+
+.kb-shell[data-theme=console] main button.bg-red-500{background:#21262d!important;color:#f85149!important;border:1px solid #30363d!important}
+
+.kb-shell[data-theme=console] main button.bg-red-500:hover{background:#da3633!important;color:#fff!important}
+
+.kb-shell[data-theme=console] main input:not([type=checkbox]):not([type=range]),.kb-shell[data-theme=console] main textarea,.kb-shell[data-theme=console] #login input{font-family:var(--mono);font-size:13.5px}
+
+.kb-shell[data-theme=console] #sf label{font-family:var(--mono);font-size:12.5px!important;color:#8b949e!important}
+
+.kb-shell[data-theme=console] #sf>div{border-bottom-style:dashed}
+
+.kb-shell[data-theme=console] #logStats .text-xl{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #logBody td{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #logBody td:nth-child(1){color:#3fb950!important}
+
+.kb-shell[data-theme=console] #logBody td:nth-child(2) span{background:transparent!important;border:1px solid #30363d;border-radius:4px!important;color:#79c0ff!important}
+
+.kb-shell[data-theme=console] #logBody td:nth-child(2) span.bg-red-50{color:#f85149!important;border-color:#f8514966}
+
+.kb-shell[data-theme=console] #logBody td:nth-child(5):before{content:"→ "}
+
+.kb-shell[data-theme=console] #dropZone{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #dropZone .text-4xl{display:none}
+
+.kb-shell[data-theme=console] #dropZone p.text-gray-500:before{content:"$ kb upload ";color:#3fb950}
+
+.kb-shell[data-theme=console] #laa,.kb-shell[data-theme=console] #smartResult{font-size:13.5px}
+
+.kb-shell[data-theme=console] #tab-graph .card{background-color:#0d1117;background-image:radial-gradient(#21262d 1px,transparent 1px);background-size:18px 18px}
+
+.kb-shell[data-theme=console] #tab-graph>.rounded-lg{font-family:var(--mono);font-size:12px!important}
+
+.kb-shell[data-theme=console] #adBody,.kb-shell[data-theme=console] #adBody td,.kb-shell[data-theme=console] #adBody th{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #adBody h4:before{content:"### ";color:#6e7681}
+
+.kb-shell[data-theme=console] #skillsList{font-family:var(--mono);font-size:12.5px}
+
+.kb-shell[data-theme=console] #skillsList>div[class*="bg-"],.kb-shell[data-theme=console] #skillsList [class*="bg-blue-50"],.kb-shell[data-theme=console] #skillsList [class*="bg-emerald-50"],.kb-shell[data-theme=console] #skillsList [class*="bg-amber-50"]{background:#0d1117!important;border:1px solid #30363d!important}
+
+.kb-shell[data-theme=console] .note-content{font-size:15px}
+
+.kb-shell[data-theme=console] .note-content h1,.kb-shell[data-theme=console] .note-content h2{border-bottom:1px solid #21262d;padding-bottom:6px}
+
+.kb-shell[data-theme=console] .note-content pre{background:#161b22;border:1px solid #30363d;color:#e6edf3}
+
+.kb-shell[data-theme=console] .note-content :not(pre)>code{background:rgba(110,118,129,.2);color:#e6edf3}
+
+.kb-shell[data-theme=console] .note-content blockquote{border-left-color:#3d444d;background:transparent;color:#8b949e}
+
+.kb-shell[data-theme=console] .note-content a{color:#58a6ff}
+
+.kb-shell[data-theme=console] #nv .edit-toolbar button{border-radius:6px!important;font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #pr>div,.kb-shell[data-theme=console] #as>div{font-family:var(--mono);font-size:12.5px}
+
+.kb-shell[data-theme=console] #login{background:#010409!important}
+
+.kb-shell[data-theme=console] #login>div{background:#0d1117!important;border:1px solid #30363d!important;border-radius:10px!important;padding-top:44px!important;position:relative;box-shadow:0 0 0 1px #010409,0 16px 40px rgba(0,0,0,.6)!important}
+
+.kb-shell[data-theme=console] #login>div:before{content:"";position:absolute;top:14px;left:16px;width:10px;height:10px;border-radius:50%;background:#ff5f56;box-shadow:16px 0 #ffbd2e,32px 0 #27c93f}
+
+.kb-shell[data-theme=console] #login>div:after{content:"kb — login";position:absolute;top:9px;left:0;right:0;text-align:center;font:12px var(--mono);color:#6e7681}
+
+.kb-shell[data-theme=console] #login>div>span:first-child{background:transparent!important;border:1px solid #30363d;color:#3fb950!important;font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #login h1{font-family:var(--mono);font-size:22px!important}
+
+.kb-shell[data-theme=console] #login p.text-gray-500{font-family:var(--mono);font-size:12px!important}
+
+.kb-shell[data-theme=console] #login p.text-gray-500:before{content:"$ ";color:#3fb950}
+
+.kb-shell[data-theme=console] #login .login-btn{font-family:var(--mono)}
+
+.kb-shell[data-theme=console] #login .login-btn.text-blue-600{color:#e6edf3!important;border-color:#f78166!important}
+
+html.kb-shell[data-theme=console] main button.bg-blue-600,html.kb-shell[data-theme=console] main button.bg-violet-600,html.kb-shell[data-theme=console] #login button.bg-blue-600{background:#238636!important}
+
+html.kb-shell[data-theme=console] main button.bg-blue-600:hover,html.kb-shell[data-theme=console] main button.bg-violet-600:hover{background:#2ea043!important;filter:none}
+
+html.kb-shell[data-theme=console] #logPg button.bg-blue-600{background:#1f6feb!important}
+
+.kb-shell[data-theme=console] main .card h3 .ki-e{color:#8b949e}
+
+.kb-shell[data-theme=console] .ki-e-check,.kb-shell[data-theme=console] .ki-e-tick,.kb-shell[data-theme=console] .ki-e-dot{color:#3fb950}
+
+.kb-shell[data-theme=console] .ki-e-xc{color:#f85149}.kb-shell[data-theme=console] .ki-e-warn,.kb-shell[data-theme=console] .ki-e-hourglass{color:#d29922}
+
+.kb-shell[data-theme=console] #nt .ki-e-folderopen,.kb-shell[data-theme=console] #nt .ki-e-folder{color:#54aeff}

@@ -1,0 +1,26 @@
+name: Guard
+
+# 仓库闸门（2026-10-19）：main 分支保护把本 job 设为必过检查。
+# history：只允许本仓快照这一个根提交，旧历史 force-push 或 merge 进来都会失败。
+# secrets：gitleaks 扫全部历史（不是只扫当前文件）。
+# paths / content：白名单路径 + 不许出现真实 IP、文档里不许出现 /root/。
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 历史 / 路径 / 内容闸
+        run: python3 scripts/ci/guard.py all
+      - name: 密钥扫描（全部历史）
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git . --redact -v

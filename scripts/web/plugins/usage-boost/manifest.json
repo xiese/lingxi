@@ -1,0 +1,9 @@
+{
+  "name": "usage-boost",
+  "title": "使用增强",
+  "version": "1.0.0",
+  "description": "两条使用增强：①总览页趋势图改为全量取数（/api/notes/tree），支持日/月粒度切换与点柱子看入库数；②笔记目录改为两层显示（顶层文件夹 → 文件夹内笔记），带面包屑返回。停用后回到原来的 12 月趋势图与平铺目录。",
+  "mount": "dash",
+  "entry": "plugin.js",
+  "permissions": []
+}

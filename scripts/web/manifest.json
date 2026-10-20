@@ -1,0 +1,17 @@
+{
+  "name": "知识库",
+  "short_name": "知识库",
+  "description": "个人知识管理系统",
+  "start_url": "/web/",
+  "scope": "/web/",
+  "display": "standalone",
+  "background_color": "#f9fafb",
+  "theme_color": "#2563eb",
+  "orientation": "any",
+  "icons": [{
+    "src": "/web/favicon.svg",
+    "sizes": "any",
+    "type": "image/svg+xml",
+    "purpose": "any"
+  }]
+}

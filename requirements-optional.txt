@@ -1,0 +1,16 @@
+# 向量检索可选依赖
+#
+# 安装：pip install -r requirements-optional.txt
+#
+# 不安装也能正常使用：默认 embedding_type=bm25 走纯关键词检索，
+# 不需要这些包，也不需要任何外部嵌入服务。
+#
+# 装了之后：
+#   · faiss-cpu    向量检索加速（缺失时自动降级到 numpy/sklearn，约慢 10 倍）
+#   · scikit-learn 上述降级路径的余弦相似度实现
+#
+# 注意：向量检索本身需要你在「设置」里配置 embedding_base 与 embedding_model
+# 指向一个兼容 OpenAI /v1/embeddings 的 HTTP 服务；本仓库不含本地推理引擎。
+
+faiss-cpu==1.13.2
+scikit-learn==1.7.2

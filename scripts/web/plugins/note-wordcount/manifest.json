@@ -1,0 +1,9 @@
+{
+  "name": "note-wordcount",
+  "title": "笔记字数",
+  "version": "1.0.0",
+  "description": "在笔记详情底部显示本篇正文字数与阅读时长估算。用来验证插件机制：关掉后这里就消失。",
+  "mount": "note-detail",
+  "entry": "plugin.js",
+  "permissions": []
+}
