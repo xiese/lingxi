@@ -59,9 +59,9 @@ BANNED_WORDS = (
     "熊猫" + "联盟",             # 真实业务名
     "新联" + "竞技",             # 真实业务名
     "镖" + "局",                 # 真实业务名
-    
-    ".local" + ">",              # 提交作者里的主机名邮箱
 )
+# 真机主机名检测用通用模式，不把具体主机名写进代码（否则规则自身就是泄露）。
+HOSTNAME_LIKE = re.compile(r"\b[A-Z]\d{10,}\b")
 
 IP_RE = re.compile(r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])")
 IP_ALLOW_EXACT = {"127.0.0.1", "0.0.0.0", "1.2.3.4", "5.6.7.8", "255.255.255.255", "255.255.255.0"}
@@ -147,6 +147,9 @@ def check_content(files):
             for w in BANNED_WORDS:
                 if w in line:
                     errs.append(f"{p}:{n} 出现禁词 {w}（称呼/业务名/主机名不许进仓库）")
+            m = HOSTNAME_LIKE.search(line)
+            if m:
+                errs.append(f"{p}:{n} 出现疑似真机主机名（大写字母+长数字）")
     return errs
 
 
@@ -161,9 +164,11 @@ def check_authors(ref="HEAD"):
             for w in BANNED_WORDS:
                 if w in field:
                     errs.append(f"提交作者字段含禁词 {w}：{field}")
+            if HOSTNAME_LIKE.search(field):
+                errs.append(f"提交作者字段含疑似真机主机名：{field}")
             m = re.search(r"@([\w.-]+)", field)
-            if m and (m.group(1).endswith(".local")):
-                errs.append(f"提交作者邮箱是真机主机名：{field}")
+            if m and m.group(1).endswith(".local"):
+                errs.append(f"提交作者邮箱是主机名后缀 .local：{field}")
     return errs
 
 
