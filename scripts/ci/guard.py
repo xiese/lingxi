@@ -48,6 +48,21 @@ OLD_REPO_NAMES = (
     "xiese/" + "123",
 )
 
+# 2026-10-20 加固：称呼、业务名、真机主机名。之前闸门一条都拦不住，泄露全靠人肉记。
+# 一律拆开拼接，避免本文件自己命中自己的规则。
+BANNED_WORDS = (
+    "哥" + "哥",                 # 私人称呼
+    "小" + "灵儿",               # 私人称呼
+    "超" + "链",                 # 真实业务名
+    "BTC" + "268",              # 真实业务名
+    "加拿大" + "28",             # 真实业务名
+    "熊猫" + "联盟",             # 真实业务名
+    "新联" + "竞技",             # 真实业务名
+    "镖" + "局",                 # 真实业务名
+    
+    ".local" + ">",              # 提交作者里的主机名邮箱
+)
+
 IP_RE = re.compile(r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])")
 IP_ALLOW_EXACT = {"127.0.0.1", "0.0.0.0", "1.2.3.4", "5.6.7.8", "255.255.255.255", "255.255.255.0"}
 # 闸门自身与 CI 配置必须含 /root/ 字面量才能表达规则，单独豁免。
@@ -129,6 +144,26 @@ def check_content(files):
             for name in OLD_REPO_NAMES:
                 if name in line:
                     errs.append(f"{p}:{n} 出现旧仓名 {name}（请改用新仓 xiese/lingxi）")
+            for w in BANNED_WORDS:
+                if w in line:
+                    errs.append(f"{p}:{n} 出现禁词 {w}（称呼/业务名/主机名不许进仓库）")
+    return errs
+
+
+def check_authors(ref="HEAD"):
+    """作者闸：真机主机名会随 commit 作者字段一起推上 GitHub，必须单独拦。"""
+    errs = []
+    out = git("log", "--format=%an|%ae|%cn|%ce", ref)
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        for field in line.split("|"):
+            for w in BANNED_WORDS:
+                if w in field:
+                    errs.append(f"提交作者字段含禁词 {w}：{field}")
+            m = re.search(r"@([\w.-]+)", field)
+            if m and (m.group(1).endswith(".local")):
+                errs.append(f"提交作者邮箱是真机主机名：{field}")
     return errs
 
 
@@ -143,6 +178,8 @@ def main():
         errs += check_paths(files)
     if mode in ("content", "all"):
         errs += check_content(files)
+    if mode in ("authors", "history", "all"):
+        errs += check_authors(ref)
     if errs:
         print("❌ 仓库闸门未通过：")
         for e in errs[:80]:
