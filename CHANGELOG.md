@@ -4,7 +4,7 @@
 
 ### 变更
 
-- GitHub 仓库改名为 `xiese/lingxi`，提交历史不变（HEAD 仍为 `69274c1`）。
+- GitHub 仓库改名为 `xiese/lingxi`；仓库历史重建为单根提交的独立快照，与旧历史无共同祖先。
 - README 标题改为「灵犀 · lingxi」，加副标题 `one thread, both ends.`。
 - `AGENTS.md`、`CONTRIBUTING.md`、`docs/DEVELOPMENT.md`、`docs/INSTALL.md` 里的仓库名与 clone 地址同步更新。
 - `scripts/deploy.sh` 的 `REMOTE_URL`、`scripts/release-deploy.sh` 的 `REPO` 同步更新。
