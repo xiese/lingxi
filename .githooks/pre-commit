@@ -14,4 +14,5 @@ fi
 # 路径与内容闸：检查「提交后的」受跟踪文件集合
 python3 scripts/ci/guard.py paths || fail=1
 python3 scripts/ci/guard.py content || fail=1
+python3 scripts/ci/guard.py authors || fail=1
 exit $fail

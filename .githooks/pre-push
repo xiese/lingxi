@@ -6,6 +6,7 @@ fail=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
   python3 scripts/ci/guard.py history "$local_sha" || fail=1
+  python3 scripts/ci/guard.py authors "$local_sha" || fail=1
   if command -v gitleaks >/dev/null 2>&1; then
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then range="$local_sha"; else range="$remote_sha..$local_sha"; fi
     gitleaks git . --redact --no-banner --log-opts="$range" >/tmp/.gl-pre-push.out 2>&1 || {
