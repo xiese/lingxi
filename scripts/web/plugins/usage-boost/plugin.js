@@ -185,13 +185,29 @@ function dirListHtml(items, filter){
   var shown = 0;
   g.names.forEach(function(name){
     var list = g.folders[name];
-    if (f && name.toLowerCase().indexOf(f) < 0) return;
+    // 过滤命中口径：文件夹名命中，或文件夹内有笔记的标题/路径命中。
+    // 只比文件夹名的话，搜「待办」「cpa」这类笔记名第一层永远 0 命中，
+    // 用户看到的就是「无匹配内容」——两层视图上线后搜不到笔记名的根因。
+    var hit = 0;
+    if (f) {
+      if (name.toLowerCase().indexOf(f) >= 0) {
+        hit = list.length;              // 文件夹名命中：整个文件夹都算
+      } else {
+        list.forEach(function(it){
+          if (String(it.path || '').toLowerCase().indexOf(f) >= 0
+              || String(it.title || '').toLowerCase().indexOf(f) >= 0) hit++;
+        });
+        if (!hit) return;               // 名字和内容都没命中，整组跳过
+      }
+    }
     shown++;
+    // 过滤态显示命中篇数，未过滤态显示总数
+    var cnt = f ? ('命中 ' + hit + ' 篇') : (list.length + ' 篇');
     h += '<div onclick="kbUsageBoost.open(\'' + jss(name) + '\')" title="' + esc(name) + '"'
       + ' style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer;font-size:13px"'
       + ' onmouseover="this.style.background=\'var(--hover,#f3f4f6)\'" onmouseout="this.style.background=\'transparent\'">'
       + '<span style="color:var(--text,#111827);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📂 ' + esc(folderTitle(name)) + '</span>'
-      + '<span style="font-size:10px;color:var(--text4,#9ca3af);flex-shrink:0">' + list.length + ' 篇</span>'
+      + '<span style="font-size:10px;color:var(--text4,#9ca3af);flex-shrink:0">' + cnt + '</span>'
       + '</div>';
   });
   if (g.rootNotes.length) {

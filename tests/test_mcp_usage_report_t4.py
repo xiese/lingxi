@@ -122,7 +122,7 @@ def test_report_合法请求落一行且统计立即可见(kb):
     usage = kb["usage"]
     assert not usage.exists(), "前置：临时库不该已有用量文件"
 
-    r = _post(kb, {"client": "web-client", "tool": "kb_read", "ok": True,
+    r = _post(kb, {"client": "dsh-web", "tool": "kb_read", "ok": True,
                    "readonly": False, "path": "20-知识/钉子.md"})
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json() == {"ok": True, "recorded": True}
@@ -130,7 +130,7 @@ def test_report_合法请求落一行且统计立即可见(kb):
     lines = usage.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1, f"应恰好落 1 行，实际 {len(lines)} 行：{lines!r}"
     row = json.loads(lines[0])
-    assert row["client"] == "web-client" and row["tool"] == "kb_read"
+    assert row["client"] == "dsh-web" and row["tool"] == "kb_read"
     assert row["ok"] is True and row["readonly"] is False
     assert row["path"] == "20-知识/钉子.md", "顶层其他字段应原样并入"
     assert row["time"], "缺省 time 必须由服务端补 now"
@@ -144,7 +144,7 @@ def test_report_合法请求落一行且统计立即可见(kb):
 
 
 def test_report_缺tool返回400且不落盘(kb):
-    r = _post(kb, {"client": "web-client", "ok": True})
+    r = _post(kb, {"client": "dsh-web", "ok": True})
     assert r.status_code == 400, r.get_data(as_text=True)
     assert "tool" in r.get_json()["error"]
     assert not kb["usage"].exists(), "400 不该落盘"
@@ -152,22 +152,22 @@ def test_report_缺tool返回400且不落盘(kb):
 
 def test_report_缺client与ok非布尔返回400(kb):
     assert _post(kb, {"tool": "kb_read", "ok": True}).status_code == 400
-    assert _post(kb, {"client": "web-client", "tool": "kb_read"}).status_code == 400
-    assert _post(kb, {"client": "web-client", "tool": "kb_read", "ok": "true"}).status_code == 400
-    assert _post(kb, {"client": "web-client", "tool": "kb_read", "ok": True,
+    assert _post(kb, {"client": "dsh-web", "tool": "kb_read"}).status_code == 400
+    assert _post(kb, {"client": "dsh-web", "tool": "kb_read", "ok": "true"}).status_code == 400
+    assert _post(kb, {"client": "dsh-web", "tool": "kb_read", "ok": True,
                       "time": "不是时间"}).status_code == 400
     assert not kb["usage"].exists()
 
 
 def test_report_只读令牌403(kb):
-    r = _post(kb, {"client": "web-client", "tool": "kb_read", "ok": True},
+    r = _post(kb, {"client": "dsh-web", "tool": "kb_read", "ok": True},
               headers=kb["ro"])
     assert r.status_code == 403
     assert not kb["usage"].exists()
 
 
 def test_report_超大请求体400(kb):
-    big = {"client": "web-client", "tool": "kb_read", "ok": True,
+    big = {"client": "dsh-web", "tool": "kb_read", "ok": True,
            "extra": {"blob": "x" * (70 * 1024)}}
     r = _post(kb, big)
     assert r.status_code == 400, r.get_data(as_text=True)
@@ -179,7 +179,7 @@ def test_report_无content_length超限仍400(kb):
     """chunked 传输时 content_length 为 None，必须靠读取后的实际字节数兜底。"""
     import io as _io
 
-    payload = json.dumps({"client": "web-client", "tool": "kb_read", "ok": True,
+    payload = json.dumps({"client": "dsh-web", "tool": "kb_read", "ok": True,
                           "extra": {"blob": "x" * (70 * 1024)}}).encode("utf-8")
     r = kb["client"].post(
         "/api/mcp-usage/report",
@@ -202,7 +202,7 @@ def test_report_单行超4KB截断而不是400(kb):
 
     核心字段本身超限才 400；这里只让 extra 撑爆，所以返回 200 + dropped。
     """
-    r = _post(kb, {"client": "web-client", "tool": "kb_read", "ok": True,
+    r = _post(kb, {"client": "dsh-web", "tool": "kb_read", "ok": True,
                    "extra": {"blob": "x" * 8000, "keep": "v"}})
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()

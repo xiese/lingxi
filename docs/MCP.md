@@ -14,7 +14,7 @@ MCP（Model Context Protocol）服务端让支持该协议的 AI 客户端能够
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `KB_HOST` | `http://127.0.0.1:8899` | REST API 地址 |
+| `KB_API_BASE` | `http://127.0.0.1:8899` | REST API 地址（新名，`KB_HOST` 为兼容旧名） |
 | `KB_ROOT` | 仓库根目录 | 知识库根目录 |
 | `KB_TOKEN_FILE` | `$KB_ROOT/.api_tokens.json` | 令牌文件路径 |
 | `KB_TOKEN` | 无 | 直接指定令牌，优先于令牌文件 |
@@ -22,6 +22,8 @@ MCP（Model Context Protocol）服务端让支持该协议的 AI 客户端能够
 | `KB_MCP_READONLY` | 无 | 设为 `1` 禁用所有写入类工具 |
 | `KB_MCP_USAGE_LOG` | `$KB_ROOT/.kb_mcp_usage.jsonl` | 调用记录文件 |
 | `KB_MCP_UPLOAD_MAX_BYTES` | `5242880` | 上传大小上限（字节） |
+| `KB_MCP_TRANSPORT` | `stdio` | `stdio` \| `sse` \| `streamable-http` \| `both`。对外提供 HTTP 时显式设 |
+| `KB_MEMORY_DB` | 无 | 长期记忆 SQLite 路径，未设时回退 `SCOPE_RECALL_DB` |
 
 SSE 方式另有：
 
@@ -43,9 +45,10 @@ SSE 方式另有：
       "command": "python3",
       "args": ["/srv/knowledge-base/scripts/kb_mcp_server.py"],
       "env": {
-        "KB_HOST": "http://127.0.0.1:8899",
+        "KB_API_BASE": "http://127.0.0.1:8899",
         "KB_ROOT": "/srv/knowledge-base",
-        "KB_CLIENT_NAME": "my-client"
+        "KB_CLIENT_NAME": "my-client",
+        "KB_MCP_TRANSPORT": "stdio"
       }
     }
   }
@@ -54,6 +57,10 @@ SSE 方式另有：
 
 将路径替换为实际部署路径。若服务端运行在虚拟环境中，`command` 应指向该环境的
 Python 解释器。
+
+> **`KB_MCP_TRANSPORT` 默认已是 `stdio`**（2026-10-22 起）。
+> 旧版默认 `both`，进程会去监听 8897/8898 而不是走 stdio，客户端直接连不上；
+> 若从旧版升级，请检查是否残留 `KB_MCP_TRANSPORT=both`。
 
 ## 三、SSE 方式
 
@@ -89,6 +96,8 @@ KB_MCP_SSE_HOST=0.0.0.0 python3 scripts/kb_mcp_sse.py
 
 > 对外提供时**必须保留鉴权**（`KB_MCP_SSE_AUTH` 保持默认值 `1`），
 > 并通过反向代理配置 HTTPS。
+>
+> 令牌表为空时 `build_mcp_auth()` 抛 `RuntimeError` 拒绝启动，**不会带无鉴权继续监听**。
 
 ## 四、工具清单
 
@@ -99,7 +108,8 @@ KB_MCP_SSE_HOST=0.0.0.0 python3 scripts/kb_mcp_sse.py
 | `kb_mentions` | `needle`, `limit`, `offset` | 全库精确扫描某字符串的提及位置 |
 | `kb_read` | `path` | 读取指定笔记 |
 | `kb_list` | `directory`, `limit`, `offset` | 列出笔记 |
-| `kb_create` | `title`, `content`, `note_type`, `subdir`, `tags`, `status`, `quality_check` | 创建或更新笔记 |
+| `kb_create` | `title`, `content`, `note_type`, `subdir`, `tags`, `status`, `quality_check` | 创建笔记（按落点覆盖） |
+| `kb_update` | `path`, `content`, `archive_old`, `quality_check` | **按路径更新已有笔记**，不改落点、不造双份 |
 | `kb_create_project_log` | `project_name`, `goal`, `changed_files`, `key_implementation`, `verification`, `issues`, `next_steps`, `tags`, `status` | 按固定模板创建项目开发记录 |
 | `kb_upload` | `file_path`, `target_dir`, `note_type`, `content`, `content_base64`, `filename` | 上传文件至知识库 |
 | `kb_ask` | `question` | 基于知识库问答 |
@@ -126,6 +136,7 @@ KB_MCP_SSE_HOST=0.0.0.0 python3 scripts/kb_mcp_sse.py
 
 ### 可选集成
 
-`memory_search` 与 `kb_dual_search` 依赖外部长期记忆存储，默认读取
-`~/.kb-memory/memory.sqlite3`，或由 `KB_MEMORY_FILES` 指定的 Markdown 文件。
+`memory_search` 与 `kb_dual_search` 依赖外部长期记忆存储。数据库路径按优先级取
+`KB_MEMORY_DB` → `SCOPE_RECALL_DB` → `~/.hermes/scope-recall/memory.sqlite3`；
+文件记忆由 `KB_MEMORY_FILES` 指定的 Markdown 文件提供。
 未配置时这两个工具返回空结果，不影响其余工具。

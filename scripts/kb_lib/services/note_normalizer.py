@@ -385,6 +385,15 @@ class NoteNormalizer:
         short = self._sanitize(stem_clean, 999)
         short = self._strip_project_name(short, folder, old_dir)
         short = self._strip_time_token(short)
+        # 2026-10-22 修（T-08）：原文件名以日期开头时，非事件型笔记的日期也会被
+        # date_re.sub("_") 抹掉，文件名只剩标题（"2026-10-19 项目进展" → "项目进展.md"）。
+        # 日期是原始信息，不能丢：日期开头的笔记一律保留 YYYY-MM-DD_ 前缀。
+        keep_date = bool(date) and bool(self.date_re.match(str(stem or "")))
+        if not is_log and keep_date:
+            cap = min(int(self.caps.get("knowledge", 20)),
+                      self.max_name - len(date) - 1 - 3)
+            short = self._sanitize(short, max(1, cap))
+            return f"{date}_{short}.md", short
         cap = int(self.caps.get("log" if is_log else "knowledge", 20))
         if is_log:
             # 事件型文件名 = YYYY-MM-DD(10) + "_" + 短标题 + ".md"(3)

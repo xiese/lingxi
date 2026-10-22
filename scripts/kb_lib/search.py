@@ -219,6 +219,11 @@ CONTENT_SAMPLE_SIZE = 20
 FALLBACK_BM25_FLOOR = 0.75   # bm25 归一分达到此值算「强命中」
 FALLBACK_BM25_SLOTS = 1      # 兜底结果里至少保留几个强 BM25 候选；置 0 完全关断
 _FM_HEAD_BYTES = 2048        # T4: 读 frontmatter 只读文件头这么多字节，避免整篇 IO
+# T-23-a: 笔记重要度加成系数。frontmatter 写了 `importance: 1.0` 的笔记，
+# 最终得分 = base × (1 + 1.0 × 0.5) = base × 1.5，即最高提升 50%。
+# 用乘法而非加法：加法会让低分笔记靠 importance 反超高分笔记，等于置顶开关；
+# 乘法保持原排序相对次序。没写 importance 的笔记乘 1.0，行为完全不变。
+IMPORTANCE_BOOST = 0.5
 
 
 def _decay_tau():
@@ -640,6 +645,7 @@ class SearchIndex:
         self._faiss_next_id = 1
         self.mtimes = {}
         self._date_cache = {}   # T4: rel -> epoch 秒（-1 = 无日期），惰性填、随索引清空
+        self._importance_cache = {}  # T-23-a: rel -> 0.0~1.0，惰性填、随索引清空
         self.lock = threading.Lock()
         self.dirty = False
         self._index_version = 0  # 索引版本号，重建/增量更新时 bump，嵌入缓存 key 依赖此值避免脏缓存
@@ -872,6 +878,7 @@ class SearchIndex:
                 self.paths, self.contents = paths, contents
                 self.mtimes = mtimes
                 self._date_cache = {}   # T4: 全量重建，日期缓存整体失效
+                self._importance_cache = {}  # T-23-a: 同上
                 self._index_version += 1  # Bump: 失效旧嵌入缓存
                 self._token_sets = None    # 失效分词集合缓存
                 self._save_index()  # 锁内持久化，避免锁外写入时读到不一致状态
@@ -1413,6 +1420,7 @@ class SearchIndex:
         # T4: 变更/删除的笔记，日期缓存必须失效（否则改了 frontmatter 日期不生效）
         for _p in list(changed_paths or []) + list(removed or []):
             self._date_cache.pop(_p, None)
+            self._importance_cache.pop(_p, None)  # T-23-a: 改了 importance 要立刻生效
         self._index_version += 1  # Bump: 失效旧嵌入缓存
         self._token_sets = None    # 失效分词集合缓存
         self._save_index()  # 在锁内持久化，避免 search 线程读到不一致状态
@@ -1727,6 +1735,7 @@ class SearchIndex:
         with self.lock:
             self.paths, self.contents, self.mtimes = [], [], {}
             self._date_cache = {}   # T4: 索引清空，日期缓存一并失效
+            self._importance_cache = {}  # T-23-a: 同上
             self.bm25 = None
             self.embeddings = None
             self.faiss_index = None
@@ -1864,7 +1873,7 @@ class SearchIndex:
         调用方据此区分「没查到」与「查失败」，不要把后者当空结果用。
         """
         try:
-            results = self._search_impl(query, top)
+            results = self._apply_importance(self._search_impl(query, top))
             return (results, None) if with_status else results
         except SearchUnavailable as e:
             log.warning("检索不可用: %s", e)
@@ -1922,6 +1931,75 @@ class SearchIndex:
             val = -1
         self._date_cache[rel] = val
         return None if val < 0 else val
+
+    def _note_importance(self, rel):
+        """T-23-a：取笔记的 frontmatter `importance`（惰性 + 缓存）。
+
+        与 `_note_epoch` 同一套写法：只读文件头 `_FM_HEAD_BYTES`，不整篇 IO。
+        返回 0.0~1.0 的浮点；没写、写坏、超范围一律返回 0.0（**不打 importance
+        的笔记行为完全不变**，这是本功能的硬前提）。
+
+        缓存 `_importance_cache` 与 `_date_cache` 同生命周期，变更/删除时一起失效。
+        """
+        cached = self._importance_cache.get(rel)
+        if cached is not None:
+            return cached
+        val = 0.0
+        try:
+            f = NOTES_DIR / rel
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                head = fh.read(_FM_HEAD_BYTES)
+            if head.startswith("---"):
+                m = re.match(r"^---\n(.*?)\n---", head, re.DOTALL)
+                if m:
+                    for line in m.group(1).split("\n"):
+                        k, _, v = line.partition(":")
+                        if k.strip() == "importance":
+                            ds = v.strip().strip('"').strip("'")
+                            if ds:
+                                try:
+                                    val = float(ds)
+                                except ValueError:
+                                    val = 0.0
+                            break
+        except Exception:
+            val = 0.0
+        if val < 0.0:
+            val = 0.0
+        elif val > 1.0:
+            val = 1.0
+        self._importance_cache[rel] = val
+        return val
+
+    def _apply_importance(self, results):
+        """T-23-a：按 frontmatter `importance` 做加权排序（就地重排并返回）。
+
+        公式：final = base × (1 + importance × IMPORTANCE_BOOST)
+        base 取 `_decay_final`（若已做时间衰减）否则 `display_score`。
+
+        为什么用乘法加成而不是加法：加法会让低分笔记靠 importance 反超高分笔记，
+        等于把 importance 当成「置顶开关」；乘法保持原排序的相对次序，只在
+        重要度相同时放大差距。
+
+        **importance 全为 0 时零开销原样返回**（不打 importance 的笔记行为完全不变）。
+        """
+        if not results:
+            return results
+        boosted = False
+        for r in results:
+            imp = self._note_importance(r.get("path"))
+            if imp > 0:
+                boosted = True
+                base = float(r.get("_decay_final", r.get("display_score", r.get("score", 0.0))))
+                r["_importance"] = round(imp, 4)
+                r["_importance_final"] = round(base * (1.0 + imp * IMPORTANCE_BOOST), 6)
+        if not boosted:
+            return results
+        results.sort(
+            key=lambda x: x.get("_importance_final", x.get("_decay_final", x.get("display_score", 0.0))),
+            reverse=True,
+        )
+        return results
 
     def _apply_time_decay(self, results, tau_days):
         """T4：对检索结果按笔记新旧做加权排序（就地重排并返回）。

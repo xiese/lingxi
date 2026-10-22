@@ -12,15 +12,217 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from fastmcp import FastMCP
 
-# 记忆检索辅助已拆到 kb_mcp_memory.py（2026-09-13）；确保 scripts/ 在 sys.path
-import sys as _sys
-_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kb_mcp_memory import memory_search_raw, format_memory_markdown
+# fastmcp 鉴权基类：模块级导入，供 KBTokenVerifier 继承。
+# 导入失败时不在这里抛错（stdio 模式根本用不到鉴权），而是记下原因，
+# 由 build_mcp_auth() 在真正需要鉴权时抛 RuntimeError —— 保持
+# 「想开鉴权却开不了时绝不裸奔」的既有约束。
+try:
+    from fastmcp.server.auth.auth import AccessToken as _AccessToken
+    from fastmcp.server.auth.auth import TokenVerifier as _TokenVerifier
+
+    _AUTH_IMPORT_ERR = None
+except Exception as _auth_exc:  # pragma: no cover - 依赖安装异常时才走
+    _AccessToken = None
+
+    class _TokenVerifier:  # type: ignore[no-redef]
+        """占位基类：仅在 fastmcp 鉴权组件缺失时存在。"""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+    _AUTH_IMPORT_ERR = _auth_exc
+
+# ── 记忆检索辅助（2026-10-21 内联，原 kb_mcp_memory.py，避免部署漏拷依赖）──
+
+
+# 外部长期记忆库（SQLite）。未配置 KB_MEMORY_DB 时默认指向用户主目录下的隐藏路径；
+# 该路径不存在时相关工具返回空结果，不影响其余功能。
+MEMORY_DB = Path(
+    os.environ.get("KB_MEMORY_DB")
+    or os.environ.get("SCOPE_RECALL_DB")
+    or (Path.home() / ".hermes" / "scope-recall" / "memory.sqlite3"))
+
+
+def _sqlite_rows_to_markdown(query: str, rows) -> str:
+    lines = [f"# 长期记忆搜索结果：{query}", "", f"- 命中：{len(rows)}", f"- 数据库：`{MEMORY_DB}`", ""]
+    if not rows:
+        lines.append("没有命中长期记忆。")
+        return "\n".join(lines)
+    for i, r in enumerate(rows, 1):
+        rid = r.get("id", "")
+        summary = (r.get("summary") or "").replace("\n", " ")[:240]
+        content = (r.get("content") or "").replace("\n", " ")[:700]
+        target = r.get("target") or ""
+        source = r.get("source") or ""
+        score = r.get("score", 0)
+        updated = r.get("updated_at") or ""
+        lines.append(f"## {i}. {summary or rid}")
+        lines.append(f"- ID：`{rid}`")
+        lines.append(f"- 分数：{score}")
+        if target or source:
+            lines.append(f"- 来源/目标：`{source}` → `{target}`")
+        if updated:
+            lines.append(f"- 更新时间：{updated}")
+        lines.append(f"- 内容：{content}")
+        lines.append("")
+    return "\n".join(lines)
+def get_memory_files():
+    env = os.environ.get("KB_MEMORY_FILES", "").strip()
+    if env:
+        return [Path(x) for x in env.split(":") if x.strip()]
+    home = Path.home()
+    return [
+        home / ".kb-memory" / "MEMORY.md",
+        home / ".kb-memory" / "USER.md",
+        home / ".kb-memory" / "AG_MEMORY.md",
+    ]
+def memory_chunks():
+    chunks = []
+    for fp in get_memory_files():
+        if not fp.exists():
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            log.warning("读取长期记忆文件失败，跳过: %s", fp, exc_info=True)
+            continue
+        parts = [p.strip() for p in text.replace("\r\n", "\n").split("§") if p.strip()]
+        if not parts:
+            parts = [text.strip()] if text.strip() else []
+        for idx, part in enumerate(parts, 1):
+            chunks.append({"source": str(fp), "index": idx, "text": part})
+    return chunks
+def score_text(query: str, text: str) -> int:
+    q = query.lower().strip()
+    t = text.lower()
+    if not q:
+        return 0
+    score = 0
+    if q in t:
+        score += 20
+    raw_tokens = query.replace("，", " " ).replace(",", " " ).replace("/", " " ).split()
+    tokens = [x.lower().strip() for x in raw_tokens if len(x.strip()) >= 2]
+    for tok in tokens:
+        if tok in t:
+            score += 5
+    chars = [c for c in query if "\u4e00" <= c <= "\u9fff"]
+    if chars:
+        score += min(10, sum(1 for c in set(chars) if c in text))
+    return score
+def _memory_db_search_raw(query: str, limit: int = 6):
+    """Search the external long-term memory SQLite store.
+
+    优先使用 memories_fts FTS5 词法召回，失败时回退 LIKE。
+    这里保持只读，不写入该数据库，避免污染外部记忆。
+    """
+    if not MEMORY_DB.exists() or MEMORY_DB.stat().st_size <= 0:
+        return []
+    limit = max(1, min(int(limit), 20))
+    terms = [x.strip() for x in re.split(r"[\s,，、/]+", query) if len(x.strip()) >= 2][:8]
+    if not terms:
+        terms = list(dict.fromkeys([c for c in query if "\u4e00" <= c <= "\u9fff"]))[:8]
+    rows = []
+
+    def score_and_add(row):
+        d=dict(row)
+        text=(d.get('content') or '')+' '+(d.get('summary') or '')+' '+(d.get('target') or '')+' '+(d.get('source') or '')
+        d['score']=score_text(query, text)
+        # FTS 命中时 bm25_score 越小越相关；转成一点加分
+        try:
+            bm=float(d.get('bm25_score'))
+            d['score'] += max(0, min(10, int(10/(1+abs(bm)))))
+        except Exception:
+            log.debug("bm25_score 无法转 float，跳过加分: %r", d.get('bm25_score'), exc_info=True)
+        if d['score']>0:
+            rows.append(d)
+
+    try:
+        conn = sqlite3.connect(f"file:{MEMORY_DB}?mode=ro", uri=True, timeout=3)
+        conn.row_factory = sqlite3.Row
+        # 1) FTS5 优先。把多个 term 作为 OR 查询，避免中文/英文混合时过窄。
+        if terms:
+            fts_query = ' OR '.join('"'+t.replace('"',' ')+'"' for t in terms)
+            try:
+                sql = """
+                SELECT m.id, m.content, m.summary, m.source, m.target, m.updated_at, m.metadata,
+                       bm25(memories_fts) AS bm25_score
+                FROM memories_fts
+                JOIN memories m ON m.id = memories_fts.memory_id
+                WHERE memories_fts MATCH ?
+                  AND COALESCE(json_extract(m.metadata, '$.lifecycle'), '') NOT IN ('superseded','obsolete','rejected','archived')
+                ORDER BY bm25(memories_fts) ASC, m.updated_at DESC
+                LIMIT ?
+                """
+                for row in conn.execute(sql, [fts_query, max(limit*3, limit)]):
+                    score_and_add(row)
+            except Exception:
+                # FTS 查询语法/分词异常时继续 LIKE fallback
+                log.warning("memories_fts FTS5 查询失败，回退 LIKE 召回", exc_info=True)
+        # 2) LIKE fallback / 补充召回
+        if len(rows) < limit:
+            clauses=[]; params=[]
+            for t in terms:
+                clauses.append("(content LIKE ? OR summary LIKE ? OR target LIKE ? OR source LIKE ?)")
+                needle=f"%{t}%"
+                params.extend([needle, needle, needle, needle])
+            where = " OR ".join(clauses) if clauses else "1=1"
+            sql = f"""
+            SELECT id, content, summary, source, target, updated_at, metadata, NULL as bm25_score
+            FROM memories
+            WHERE ({where})
+              AND COALESCE(json_extract(metadata, '$.lifecycle'), '') NOT IN ('superseded','obsolete','rejected','archived')
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """
+            for row in conn.execute(sql, [*params, max(limit*4, limit)]):
+                score_and_add(row)
+        conn.close()
+    except Exception as e:
+        log.warning("长期记忆数据库查询失败", exc_info=True)
+        return [{"id":"memory-db-error","summary":"长期记忆数据库查询失败","content":str(e),"score":0,"source":"","target":"","updated_at":""}]
+    # 去重 + 排序
+    dedup={}
+    for r in rows:
+        rid=r.get('id') or ''
+        if rid not in dedup or r.get('score',0) > dedup[rid].get('score',0):
+            dedup[rid]=r
+    rows=list(dedup.values())
+    rows.sort(key=lambda x: (x.get('score',0), x.get('updated_at') or ''), reverse=True)
+    return rows[:limit]
+def _file_memory_search_raw(query: str, limit: int = 6):
+    rows = []
+    for ch in memory_chunks():
+        sc = score_text(query, ch["text"])
+        if sc > 0:
+            rows.append({**ch, "score": sc})
+    rows.sort(key=lambda x: x["score"], reverse=True)
+    return rows[:max(1, min(int(limit), 20))]
+def memory_search_raw(query: str, limit: int = 6):
+    rows = _memory_db_search_raw(query, limit)
+    if rows:
+        return [{"kind":"memory-db", **r} for r in rows]
+    return [{"kind":"file", **r} for r in _file_memory_search_raw(query, limit)]
+def format_memory_markdown(query: str, rows) -> str:
+    if rows and rows[0].get("kind") == "memory-db":
+        return _sqlite_rows_to_markdown(query, rows)
+    lines = [f"# 文件记忆搜索结果：{query}", "", f"- 命中：{len(rows)}", ""]
+    if not rows:
+        lines.append("没有命中长期记忆。")
+        return "\n".join(lines)
+    for i, r in enumerate(rows, 1):
+        snippet = r["text"].replace("\n", " " )[:600]
+        lines.append(f"## {i}. {Path(r['source']).name} / chunk {r['index']}")
+        lines.append(f"- 来源：`{r['source']}`")
+        lines.append(f"- 分数：{r['score']}")
+        lines.append(f"- 内容：{snippet}")
+        lines.append("")
+    return "\n".join(lines)
 
 _KB_ROOT = Path(os.environ.get("KB_ROOT") or Path(__file__).resolve().parent.parent)
 TOKEN_FILE = Path(os.environ.get("KB_TOKEN_FILE", _KB_ROOT / ".api_tokens.json"))
@@ -184,10 +386,69 @@ def api(method: str, path: str, data=None, timeout: int = 30):
 
 
 def brief(obj, max_chars: int = 12000) -> str:
+    """把结果序列化成 JSON 文本，超长时**仍然返回合法 JSON**。
+
+    2026-10-22 修（T-11）：原来是 text[:max_chars] + "...<truncated>" 硬切，
+    切点落在字符串/对象中间就产出非法 JSON，调用方 json.loads 直接抛
+    JSONDecodeError（报错里的 12,000 就是这个切点）。改成逐级降级：
+    先整条丢掉尾部条目并置 truncated，仍超长再只留前若干条的 path/title，
+    最后兜底返回一个带 truncated 的最小对象——任何一级都是合法 JSON。
+    """
     text = json.dumps(obj, ensure_ascii=False, indent=2)
-    if len(text) > max_chars:
-        return text[:max_chars] + "\n...<truncated>"
-    return text
+    if len(text) <= max_chars:
+        return text
+
+    def dump(o):
+        return json.dumps(o, ensure_ascii=False, indent=2)
+
+    if isinstance(obj, dict):
+        items = obj.get("items")
+        if isinstance(items, list) and items:
+            # 一级：二分找能装下的最大条数
+            lo, hi, best = 0, len(items), None
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = dict(obj)
+                cand["items"] = items[:mid]
+                cand["truncated"] = True
+                cand["returned"] = mid
+                if len(dump(cand)) <= max_chars:
+                    best = cand
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            if best is not None:
+                return dump(best)
+            # 二级：只留 path/title
+            lo, hi, best2 = 0, len(items), None
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                slim = []
+                for it in items[:mid]:
+                    if isinstance(it, dict):
+                        slim.append({k: it[k] for k in ("path", "title") if k in it})
+                    else:
+                        slim.append(it)
+                cand = dict(obj)
+                cand["items"] = slim
+                cand["truncated"] = True
+                cand["returned"] = mid
+                cand["slim"] = True
+                if len(dump(cand)) <= max_chars:
+                    best2 = cand
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            if best2 is not None:
+                return dump(best2)
+        # 兜底：最小合法对象
+        minimal = {"truncated": True, "error": f"结果超过 {max_chars} 字符，已省略正文"}
+        for k in ("count", "total", "mode", "directory"):
+            if k in obj:
+                minimal[k] = obj[k]
+        return dump(minimal)
+
+    return dump({"truncated": True, "error": f"结果超过 {max_chars} 字符，已省略正文"})
 
 
 def format_search_markdown(res: dict, query: str) -> str:
@@ -241,7 +502,11 @@ def readonly_error(tool: str) -> str:
 
 
 def _load_sse_auth_tokens() -> dict:
-    """Build StaticTokenVerifier token map from KB_TOKEN env + .api_tokens.json."""
+    """明文令牌表：KB_TOKEN / KB_MCP_SSE_TOKENS / master。
+
+    设备令牌不在这里 —— schema=2 的令牌表键是 sha256(pepper+明文)，
+    拿它当明文注册等于把哈希当密码用（见 KBTokenVerifier）。
+    """
     tokens = {}
     env_tok = os.environ.get("KB_TOKEN", "").strip()
     if env_tok:
@@ -261,25 +526,114 @@ def _load_sse_auth_tokens() -> dict:
         master = (data.get("master") or {}).get("token", "").strip()
         if master:
             tokens[master] = {"client_id": "kb-master", "scopes": ["kb:rw", "kb:r"]}
-        for tk, info in (data.get("tokens") or {}).items():
-            if not tk:
-                continue
-            # skip expired
-            exp = (info or {}).get("expires_at")
-            if exp:
-                try:
-                    from datetime import datetime as _dt
-                    if _dt.fromisoformat(str(exp).replace("Z", "")) < _dt.now():
-                        continue
-                except Exception:
-                    log.warning("kb_mcp_server.py 异常", exc_info=True)
-            perm = str((info or {}).get("permission", "r")).lower()
-            scopes = ["kb:r", "kb:rw"] if perm in ("rw", "master") else ["kb:r"]
-            name = (info or {}).get("name") or (info or {}).get("device") or "kb-token"
-            tokens[tk] = {"client_id": str(name)[:64], "scopes": scopes}
     except Exception:
         log.warning("kb_mcp_server.py 异常", exc_info=True)
     return tokens
+
+
+def _load_sse_hashed_tokens() -> dict:
+    """设备令牌表：{存储键: claims}。
+
+    schema=2 时键是 sha256(pepper+明文)，必须由 KBTokenVerifier 先算哈希再查；
+    schema<2（未迁移的旧表）时键是明文，直接当明文注册，保持向后兼容。
+    """
+    hashed = {}
+    try:
+        data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return hashed
+    schema = (data.get("meta") or {}).get("schema")
+    for tk, info in (data.get("tokens") or {}).items():
+        if not tk:
+            continue
+        # skip expired
+        exp = (info or {}).get("expires_at")
+        if exp:
+            try:
+                if datetime.fromisoformat(str(exp).replace("Z", "")) < datetime.now():
+                    continue
+            except Exception:
+                log.warning("kb_mcp_server.py 异常", exc_info=True)
+        perm = str((info or {}).get("permission", "r")).lower()
+        scopes = ["kb:r", "kb:rw"] if perm in ("rw", "master") else ["kb:r"]
+        name = (info or {}).get("name") or (info or {}).get("device") or "kb-token"
+        hashed[tk] = {
+            "client_id": str(name)[:64],
+            "scopes": scopes,
+            "is_hash_key": schema == 2,
+        }
+    return hashed
+
+
+class KBTokenVerifier(_TokenVerifier):
+    """按知识库令牌表校验 Bearer。
+
+    与 StaticTokenVerifier 的区别：设备令牌表在 schema=2 下存的是哈希键，
+    必须先 token_hash(出示的明文) 再查表，否则只有 master 能过，而反过来
+    把哈希串当 Bearer 却能握手成功（工具调用再 401）—— 等于把哈希当密码。
+
+    返回的 AccessToken.token 一律是**客户端出示的原始明文**，工具内转发给
+    REST 8899 时才能通过它自己的鉴权。
+    """
+
+    def __init__(self, plain: dict, hashed: dict, required_scopes=None):
+        super().__init__(required_scopes=required_scopes)
+        self._plain = plain
+        self._hashed = hashed
+        self._hash_keys = {k for k, v in hashed.items() if v.get("is_hash_key")}
+        self._plain_in_table = {k: v for k, v in hashed.items() if not v.get("is_hash_key")}
+        self._pepper_warned = False
+
+    def _hash(self, token: str) -> str:
+        try:
+            from kb_lib.store import token_hash
+        except Exception:
+            if not self._pepper_warned:
+                log.warning("kb_mcp_server.py: 无法导入 kb_lib.store.token_hash，"
+                            "哈希化设备令牌将无法通过 SSE 鉴权")
+                self._pepper_warned = True
+            return ""
+        try:
+            return token_hash(token)
+        except Exception:
+            log.warning("kb_mcp_server.py: token_hash 计算失败", exc_info=True)
+            return ""
+
+    def _lookup(self, token: str):
+        """返回 (claims, expires_at)；未匹配返回 (None, None)。"""
+        info = self._plain.get(token) or self._plain_in_table.get(token)
+        if info:
+            return info, None
+        if not self._hash_keys:
+            return None, None
+        # 出示的是表里的哈希键本身：它是存储键，不是令牌，必须拒绝。
+        if token in self._hash_keys:
+            log.warning("kb_mcp_server.py: 拒绝以令牌表哈希键作为 Bearer 使用")
+            return None, None
+        h = self._hash(token)
+        if h and h in self._hash_keys:
+            return self._hashed[h], self._hashed[h].get("expires_at")
+        return None, None
+
+    async def verify_token(self, token: str):
+        info, _ = self._lookup(token)
+        if not info:
+            return None
+        scopes = info.get("scopes", [])
+        if self.required_scopes:
+            if not set(self.required_scopes).issubset(set(scopes)):
+                log.debug("Token missing required scopes")
+                return None
+        if _AccessToken is None:
+            return None
+        return _AccessToken(
+            token=token,
+            client_id=info.get("client_id") or "kb-token",
+            scopes=scopes,
+            expires_at=None,
+            subject=info.get("sub"),
+            claims=dict(info),
+        )
 
 
 def build_mcp_auth():
@@ -288,15 +642,17 @@ def build_mcp_auth():
     if flag in ("0", "false", "no", "off"):
         return None
     try:
-        from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+        if _AUTH_IMPORT_ERR is not None:
+            raise _AUTH_IMPORT_ERR
     except Exception as e:
         # 安全加固：原先此处 return None，等于「想开鉴权却开不了时
         # 裸奔启动」，且与用户显式设 KB_MCP_SSE_AUTH=0 的返回值无法区分。改为抛错。
         raise RuntimeError(
             f"SSE 鉴权已启用（KB_MCP_SSE_AUTH 默认 1）但 fastmcp 鉴权组件导入失败: {e}"
         ) from e
-    tokens = _load_sse_auth_tokens()
-    if not tokens:
+    plain = _load_sse_auth_tokens()
+    hashed = _load_sse_hashed_tokens()
+    if not plain and not hashed:
         # 同上：空令牌表绝不能降级成无鉴权。要求先由 kb-server 生成主令牌，
         # 或由使用者显式设 KB_MCP_SSE_AUTH=0 表示「我知道这是无鉴权」。
         raise RuntimeError(
@@ -304,7 +660,7 @@ def build_mcp_auth():
             "请先启动 kb-server 生成主令牌，或显式设置 KB_MCP_SSE_AUTH=0 关闭鉴权。"
         )
     # require at least read scope
-    return StaticTokenVerifier(tokens=tokens, required_scopes=["kb:r"])
+    return KBTokenVerifier(plain=plain, hashed=hashed, required_scopes=["kb:r"])
 
 
 def _multipart_upload(filename: str, raw: bytes, target_dir: str = "", note_type: str = "") -> dict:
@@ -429,7 +785,11 @@ def kb_mentions(needle: str, limit: int = 50, offset: int = 0) -> str:
 
 @mcp.tool()
 def kb_read(path: str) -> str:
-    """读取知识库中的一篇笔记。"""
+    """读取知识库中的一篇笔记。
+
+    读回来先看第一行：若写着「本文只做指针」「主文在 …」，说明正文不在这一篇，
+    必须顺着路径去读主文，不要把摘要当完整事实回答。
+    """
     p = urllib.parse.quote(path)
     res = api("GET", f"/notes/{p}")
     log_usage("kb_read", ok="error" not in res, path=path)
@@ -446,6 +806,34 @@ def kb_list(directory: str = "", limit: int = 50, offset: int = 0) -> str:
     return brief(res)
 
 
+def _dedup_notice(degraded) -> str:
+    """把服务端的 dedup_degraded 英文原因，翻成用户看得懂的中文提示。
+
+    2026-10-17 新增。两种降级的事实不同，说法必须分开，否则等于说假话：
+    - llm_unavailable / llm_error：检索面正常，候选分数是真实精排分，可信；
+      只是最后那步「是不是同一件事」的模型判定没做。
+    - index_degraded：检索索引正在刷新，候选退化，分数不可信，只能手动查。
+    - 未知原因：给通用提示，不崩、不静默。
+
+    返回空串表示没降级，调用方不要加字段。
+    """
+    deg = str(degraded or "").strip()
+    if not deg:
+        return ""
+    if deg.startswith("llm_unavailable") or deg.startswith("llm_error"):
+        return (
+            "本次查重未生效：模型接口不可用（%s）。"
+            "下面列出的相似笔记是按内容相似度排的，分数可信，"
+            "但「是不是同一件事」这一步没做，请自己看一遍再决定要不要改写。" % deg
+        )
+    if deg.startswith("index_degraded"):
+        return (
+            "本次完全没有查重：检索索引正在刷新，相似度分数不可信。"
+            "请手动用 kb_search 查一下库中有没有同题笔记，避免写成两份。"
+        )
+    return "本次查重未完成（%s），相似笔记仅供参考。" % deg
+
+
 @mcp.tool()
 def kb_create(title: str, content: str, note_type: str = "knowledge", subdir: str = "", tags: str = "", status: str = "draft", quality_check: bool = True) -> str:
     """创建或更新知识库笔记。
@@ -453,6 +841,17 @@ def kb_create(title: str, content: str, note_type: str = "knowledge", subdir: st
     写完项目总结、研究记录、调试复盘、实现方案后必须调用本工具入库。
     默认启用质量检查；project/knowledge 笔记过短或缺少章节会被拒绝。
     质量/卫生门禁由 REST 单源执行；MCP 只转发并透传错误。
+
+    ⚠️ 写前三查（2026-10-21 立，不查就别写）：
+    1. 先 kb_search 查同名笔记。若 10-项目/ 或 20-知识/ 已有同名主文 →
+       本次只写指针：首行 `> 主文：<绝对路径>，本文只做指针`，
+       正文只留结论摘要 + 关联索引，**体积不超主文 1/3**。绝不写第二套全文。
+    2. 你打算写进知识库的每个事实，项目侧主文里有没有？没有 → 先补主文再写摘要。
+       不许把细节只留在知识侧、让项目版当二手摘要。
+    3. 同 basename 已存在 → 覆盖同一篇（本工具即覆盖语义），不要用 kb_upload
+       另起一个平行副本，那会造出新重复。
+
+    写完自检：知识库那份 / 主文 > 1/3 → 改回指针；有主文里没有的句子 → 回流进主文。
 
     写时卫生（跨平台硬约束，与 REST 一致）：
     - 禁止废弃路径 10-项目_知识库项目
@@ -477,6 +876,28 @@ def kb_create(title: str, content: str, note_type: str = "knowledge", subdir: st
     # 2026-10-17：服务端写笔记要跑 LLM 查重，实测 46 秒，30 秒必超时（误报写入失败）。
     res = api("POST", "/notes", data, timeout=120)
     ok = "error" not in res
+    # ── 更新建议（2026-10-11 新增，从本机运行版回流）──
+    # 本工具落盘路径由标题派生，标题略有差异就会另存一份 → 同题两版。
+    # 这里不靠 LLM 判定（实测 LLM 有 40% 误判成 new），直接用查重候选的客观分数。
+    try:
+        if res.get("action") == "created":
+            _cands = res.get("dedup_candidates") or []
+            _top = _cands[0] if _cands else None
+            if _top and float(_top.get("score") or 0) >= 0.85:
+                res["suggested_action"] = "kb_update"
+                res["suggested_path"] = _top.get("path")
+                res["suggested_reason"] = (
+                    "库中已存在高度相似笔记（相似度 %s）：%s。"
+                    "若本次意图是「更新」而非新主题，请改用 kb_update(path=..., content=...) "
+                    "改写该篇，避免同题两版；本次已按新建写入 %s。"
+                    % (_top.get("score"), _top.get("path"), res.get("path"))
+                )
+    except Exception:
+        pass
+    # ── 查重降级提示（2026-10-17 新增，从本机运行版回流）──
+    _notice = _dedup_notice(res.get("dedup_degraded"))
+    if _notice:
+        res["dedup_notice"] = _notice
     log_usage(
         "kb_create",
         ok=ok,
@@ -486,6 +907,45 @@ def kb_create(title: str, content: str, note_type: str = "knowledge", subdir: st
         reason=None if ok else res.get("error"),
     )
     return brief(res, 12000)
+
+
+@mcp.tool()
+def kb_update(path: str, content: str, archive_old: bool = True, quality_check: bool = False) -> str:
+    """更新**已存在**的知识库笔记（按路径精确改写同一篇，不会另存新文件）。
+
+    何时用：当你要「更新知识库」而目标笔记已存在时，用本工具，**不要**用 kb_create。
+    kb_create 的落盘路径由标题决定，标题略有差异就会另存一份、旧文留在库里，
+    导致同题两版、旧状态被检索到。
+
+    参数：
+    - path：笔记相对路径（如 20-知识/运维/xxx.md），可从 kb_search / kb_list 取
+    - content：新的**正文**（不必带 frontmatter，服务端会沿用旧 frontmatter 与 H1，
+      只换正文；若要改标题/标签，请传带 frontmatter 的完整内容）
+    - archive_old：默认 True —— 改前内容归档到 50-档案/_旧版本/（不进检索索引），
+      并在 frontmatter 记 version / supersedes，可回溯
+    - quality_check：默认 False（更新不卡质量门禁；需强校验时传 True）
+    """
+    if READONLY:
+        return readonly_error("kb_update")
+    p = (path or "").strip().lstrip("/")
+    if not p:
+        return brief({"error": "需要 path（笔记相对路径，如 20-知识/运维/xxx.md）"})
+    data = {
+        "content": content,
+        "archive_old": bool(archive_old),
+        "preserve_frontmatter": True,
+        "quality_check": bool(quality_check),
+    }
+    # 2026-10-17：同上，更新也走查重，30 秒不够。
+    res = api("POST", f"/notes/{urllib.parse.quote(p)}", data, timeout=120)
+    ok = "error" not in res
+    # 与 kb_create 同一套降级提示（2026-10-17），文案规则集中在 _dedup_notice()。
+    _notice = _dedup_notice(res.get("dedup_degraded"))
+    if _notice:
+        res["dedup_notice"] = _notice
+    log_usage("kb_update", ok=ok, path=p, reason=None if ok else res.get("error"))
+    return brief(res, 12000)
+
 
 
 @mcp.tool()
@@ -632,7 +1092,14 @@ def kb_memory_boundary_check(summary: str, task_type: str = "general") -> str:
 
 @mcp.tool()
 def kb_ask(question: str) -> str:
-    """基于知识库进行问答。需要综合多篇笔记时调用。"""
+    """基于知识库进行问答。需要综合多篇笔记时调用。
+
+    服务端提示词已约束：只用库内事实、路径必须真实、冲突时标日期取新、
+    区分实测与推测、无答案直接说没有、遇到「本文只做指针」要指向主文。
+
+    注意：它只能读索引里的笔记，读不到项目代码仓里的主文（$KB_ROOT/<项目>/docs/）。
+    项目实现细节别只靠它，配合 kb_read 或直接读文件。
+    """
     res = api("POST", "/api/llm/ask", {"q": question}, timeout=60)
     log_usage("kb_ask", ok="error" not in res, question=question)
     return brief(res, 20000)
@@ -681,6 +1148,11 @@ def kb_upload(
     3) 二进制：content_base64 + filename（远端 SSE 推荐）
 
     注意：file_path 读的是 MCP 进程所在机器，不是用户电脑路径。
+
+    ⚠️ 写笔记优先用 kb_create（覆盖同路径、带质量与卫生闸门）。
+    本工具是「传文件」语义，同 basename 会另存 → **容易造出平行副本变成新的重复**。
+    只有下面两种情况用它：① 传 pdf/图片等二进制；② kb_create 被章节检查卡住，
+    正文已写好、只想落盘（此时仍要先 kb_search 确认没有同名主文）。
     """
     if READONLY:
         return readonly_error("kb_upload")
@@ -747,12 +1219,14 @@ def kb_upload(
 
 if __name__ == "__main__":
     # 传输层选择（2026-10-17）：KB_MCP_TRANSPORT = sse | streamable-http | both | stdio
-    #   默认 both —— 两条 HTTP 传输同时开，客户端按能力自选。
+    #   默认 stdio —— 绝大多数客户端（Hermes / DSH / Claude Desktop）都是 stdio 拉起。
+    #   默认 both 会让进程去监听 8897/8898 而不是走 stdio，客户端直接连不上。
+    #   要对外提供 HTTP 必须显式设 KB_MCP_TRANSPORT=sse|streamable-http|both。
     #   鉴权：走 build_mcp_auth()，空令牌表时抛 RuntimeError 并拒绝启动
     #   （由 kb_mcp_sse.py 同款策略保证：绝不带无鉴权继续监听）。
     #   端口：sse 用 KB_MCP_SSE_HOST/KB_MCP_SSE_PORT（默认 127.0.0.1:8898）；
     #         streamable-http 用 KB_MCP_HTTP_HOST/KB_MCP_HTTP_PORT（默认 127.0.0.1:8897）。
-    _transport = (os.environ.get("KB_MCP_TRANSPORT", "both") or "both").strip().lower()
+    _transport = (os.environ.get("KB_MCP_TRANSPORT", "stdio") or "stdio").strip().lower()
     if _transport in ("stdio",):
         mcp.run(transport="stdio")
         raise SystemExit(0)

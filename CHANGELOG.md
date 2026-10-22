@@ -1,3 +1,103 @@
+## 2026-10-21 · MCP 两份副本合并为同一份
+
+同一份 `kb_mcp_server.py` 长期存在两个各自演进的副本：仓库内这份 15 个工具、
+本机运行版 16 个工具，差异 746 行。双方各有对方没有的东西，导致「查源码查到
+的不是在跑的那份」，据此写出的使用文档出现「`kb_update` 不存在」等硬错误。
+本次把仓库内这份补齐为超集。
+
+### 一、从运行版回流（仓库版原本缺失）
+
+- `kb_update(path, content, archive_old=True, quality_check=False)`：按路径更新
+  已有笔记，不改落点、不造双份。此前只能用 `kb_create` 还原 type/subdir/tags
+  三件套来「假装更新」，漏一个参数就另存一份。
+  `archive_old=True` 时旧版归档到 `50-档案/_旧版本/<文件名>__<时间戳>.md`。
+- `_dedup_notice()` + `kb_create` 的 `suggested_action` / `suggested_path`：
+  查重候选相似度 ≥ 0.85 时提示改用 `kb_update`；查重降级时给出中文原因。
+- 记忆检索内联进单文件，不再 `from kb_mcp_memory import`：部署只需拷一个文件。
+
+### 二、记忆检索的两处实质差异（仓库版原本是坏的）
+
+- `MEMORY_DB` 只认 `KB_MEMORY_DB`，默认落到不存在的 `~/.kb-memory/memory.sqlite3`，
+  实测 `memory_search("知识库")` 命中 0。改为按
+  `KB_MEMORY_DB` → `SCOPE_RECALL_DB` → `~/.hermes/scope-recall/memory.sqlite3`
+  取路径，同一次查询命中 2 条，与运行版一致。
+- 内联后缺 `import sqlite3`，`_memory_db_search_raw` 直接 `NameError`，
+  被 `except` 吞成「长期记忆数据库查询失败」。已补。
+
+### 三、`KB_MCP_TRANSPORT` 默认值是个坑（未改代码，写进文档）
+
+`__main__` 里默认 `both`，不设环境变量时会去监听 8897/8898 而非走 stdio。
+运行版是硬编码 `mcp.run(transport="stdio")`，所以线上从没暴露过这个问题。
+部署这份到 stdio 客户端时**必须显式设 `KB_MCP_TRANSPORT=stdio`**，
+否则客户端连不上。已在 `docs/MCP.md` 的 stdio 配置示例里标红。
+
+### 关键文件
+
+- `scripts/kb_mcp_server.py`（937 → 1208 行，16 个工具）
+- `docs/MCP.md`（环境变量表补 `KB_API_BASE` / `KB_MCP_TRANSPORT` / `KB_MEMORY_DB`；
+  工具清单补 `kb_update`；SSE 鉴权行为说明）
+
+### 验证
+
+- `ast.parse` 语法通过；`@mcp.tool()` 计数 16，与运行版工具名集合完全一致（双向差集为空）
+- 连生产 1.92 实测 9 个只读工具全部返回正常：
+  `memory_search`（命中 2）、`kb_search`（语义 3 条）、`kb_dual_search`、
+  `kb_read`（2,127 字符）、`kb_list`、`kb_mentions`（6 篇 21 处）、
+  `kb_index_status`（indexed=1795, consistent=true）、`kb_dashboard`、`kb_note_hygiene`
+- 签名核对：`kb_update(path, content, archive_old=True, quality_check=False)`
+- 与改前对比：275 行新增 / 4 行删除（删的是 `from kb_mcp_memory import` 那 4 行）
+
+### 未做
+
+- **运行版未动**：本机 `$KB_ROOT/.hermes/kb-mcp/kb_mcp_server.py` 仍是旧版。
+  回填 SSE 鉴权加固 + `KB_API_BASE` 拆名 + 双传输需要重启两个 MCP 进程
+  （687759、854677），属生产操作，待单独授权。
+
+## 2026-10-21 · 梦境进目录 + 两层目录过滤修笔记名
+
+2026-10-21 修复「目录看不到梦境」「两层目录搜不到笔记名」。
+
+### 一、`60-梦境` 从排除名单移除（`scripts/kb_lib/config.py`）
+
+- `PROTECTED` 原含 `"60-梦境"`，但它在 `TYPE_MAP` 里是正式类型（`dream`）。
+  被排除的后果是双重的：27 篇梦境笔记既不进 `/api/notes/tree`，也不进检索统计。
+- 同步把 `60-梦境` 加进 `SCAN_DIRS`。只改 `PROTECTED` 不改 `SCAN_DIRS`，
+  目录能看到但关键词搜索仍搜不到，等于只修一半。
+- 其他受保护目录（`00-索引`、`scripts`、`_spec`、`_模板`、`.git`、`_assets`）不变。
+
+### 二、`usage-boost` 插件两层目录过滤漏掉笔记名
+
+- 现象：手机端「📂 目录」面板搜「待办」显示「无匹配内容」，而实际有 28 篇匹配。
+- 根因：`dirListHtml()` 的第一层过滤只比较文件夹名（`g.names`），
+  文件夹内的笔记标题完全不参与匹配。默认停在第一层，所以搜任何笔记名都是 0 命中。
+- 修复：文件夹名不命中时，再查该文件夹内是否有笔记的 `path` 或 `title` 命中；
+  有则保留该文件夹，右侧计数显示「命中 N 篇」，取代原来的总篇数。
+- 未改：`dirFolderHtml()`（第二层本来就有标题过滤）、`groupTop()`、`app.js`、`index.html`。
+
+### 验证
+
+- `pytest tests/` → 594 passed, 2 skipped
+- `tests/js/*.test.cjs` → 20 个脚本退出码全 0
+- 真实浏览器（2116 篇笔记，含 27 篇梦境）：
+  - 搜「待办」→ 5 个文件夹显示「命中 N 篇」，不再是无匹配
+  - 搜「cpa」→ 10-项目 2 / 20-知识 21 / 50-档案 18
+  - 搜「梦境」→ 60-梦境 命中 27 篇
+  - 搜「xyz不存在」→ 正确显示无匹配
+  - 点进 `60-梦境` → 27 篇，面包屑「🏠 全部 / 📂 梦境」，返回后回到文件夹层
+
+### 部署（生产 1.92）
+
+走「打包复制」而非 `deploy.sh`（push 被禁用、本地领先 10 commit）。
+
+- 目标：`$KB_ROOT/releases/kb-1.0.3/`（`current` 软链指向它）
+- 覆盖：`scripts/kb_lib/config.py`、`scripts/web/plugins/usage-boost/plugin.js`
+- 备份：`$KB_ROOT/backup-manual/{config.py,plugin.js}.bak-20261021-165342`
+- `VERSION` 同步升到 `1.0.4`（复制时曾把生产 1.0.3 带回 1.0.2，已修正）
+- 重启 `kb-server` 后生产实测：`/api/notes/tree` 2080 条、`60-梦境` 27 篇、
+  一级目录出现 `60-梦境`；浏览器搜「待办」→ 5 文件夹命中、搜「梦境」→
+  `60-梦境` 27 篇、`xyz不存在` → 无匹配、点进梦境 27 篇带面包屑、
+  文件夹内搜「10-16」→ 1 篇。
+
 ## 1.0.3
 
 2026-10-20 仓库更名为 **lingxi（灵犀）**。
@@ -30,6 +130,16 @@
 - `.github/workflows/release.yml` 的 release 机器人提交身份：是机器人签名，不是仓库名。
 - 代码内路径、API 路径、数据库表名均未改动。
 
+### 发布流水线（本仓）
+
+- `.github/workflows/release.yml`：`main` 上 `config.py` 的 `VERSION` 变更即自动打 tag、
+  跑测试与密钥扫描、按白名单打包、用 CHANGELOG 对应段落建 GitHub Release。
+- 生产只从 Release 包部署（`scripts/release-deploy.sh`），不再 `git pull`。
+
+### 历史说明
+
+- 本仓为单根快照：根提交 `7794127`，与更早的本地开发历史无共同祖先。
+  本地 29 个提交的代码内容已按文件重放到本快照之上，不是合并历史。
 ## 1.0.2
 
 2026-10-19 发布。修复维护者真机反馈的两个问题：设置页观感不像苹果系统设置、登录设备列表永远是 0 台。

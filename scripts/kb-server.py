@@ -18,6 +18,12 @@ app = create_app()
 # 索引、不清令牌。
 start_background()
 
+# 2026-10-22（T-04）：启动自检 —— 探上游 /v1/models，llm_model 不在清单里就告警。
+# 只告警不阻止启动：上游不可达是常态，自检失败不能把服务拖死。
+from kb_lib.selfcheck import run_on_startup  # noqa: E402
+
+run_on_startup()
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  📚 知识库 API v" + VERSION)

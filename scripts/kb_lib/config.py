@@ -29,7 +29,7 @@ else:
 KB_ROOT = Path(os.environ.get("KB_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 _temp_file_lock = threading.Lock()
 NOTES_DIR = KB_ROOT / "笔记"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 # ── 环境变量新旧名兼容（2026-10-07 KB_HOST 拆名）──
 #
 # KB_HOST 历史上同名双义：本文件用它表示「监听绑定地址」，kb_mcp_server.py
@@ -114,13 +114,15 @@ USER_OWNED_DIRS = ("70-经验",)
 USER_OWNED_ACK = "owner_ack"
 
 # 扫描/统计目录
-SCAN_DIRS = ["10-项目", "20-知识", "30-写作", "30-记录", "40-日记", "50-档案", "99-待整理"]
+SCAN_DIRS = ["10-项目", "20-知识", "30-写作", "30-记录", "40-日记", "50-档案", "60-梦境", "99-待整理"]
 
 # ID 前缀映射
 TYPE_PREFIX = {"knowledge": "kb", "project": "proj", "writing": "write", "diary": "day", "record": "rec", "archive": "arc"}
 
 # ── 路径排除 ──
-PROTECTED = {"00-索引", "scripts", "_spec", "_模板", ".git", "_assets", "60-梦境"}
+# 60-梦境 不在排除名单里：它是 TYPE_MAP 里的正式类型（dream），
+# 排除它会导致 27 篇梦境笔记既不进目录树、也搜不到。
+PROTECTED = {"00-索引", "scripts", "_spec", "_模板", ".git", "_assets"}
 
 
 def is_excluded_path(rel, *, exclude_archived=False, exclude_assets=True):
