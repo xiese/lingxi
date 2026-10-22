@@ -98,6 +98,59 @@
   `60-梦境` 27 篇、`xyz不存在` → 无匹配、点进梦境 27 篇带面包屑、
   文件夹内搜「10-16」→ 1 篇。
 
+## 1.0.4
+
+2026-10-22 发布。把本地开发库 29 个提交的代码内容合并进单根快照，并部署到生产。
+
+### 仓库历史合并
+
+本地开发库与 GitHub 快照是**两条无共同祖先的历史**：本地根提交 `4916136`（10-19），
+GitHub 根提交 `7794127`（10-20 `filter-repo` 重建）。直接推送会抹掉远端 11 个提交
+（隐私闸门加固、release 流水线、v1.0.2/v1.0.3 tag），因此改为以远端单根为基线、
+按文件重放本地代码内容，提交 `2ba68e1`，fast-forward 推送。
+
+保留远端版本、未回退的文件：`.github/ROOT_COMMIT`、`.github/workflows/release.yml`、
+`.githooks/pre-commit`、`.githooks/pre-push`、`scripts/ci/guard.py`、`scripts/deploy.sh`、
+`scripts/release-deploy.sh`、`.gitignore`。
+
+### 纳入的功能
+
+| 类别 | 内容 |
+|---|---|
+| 认证 | Token 存储改哈希 + 只下发一次 + pepper 漂移显式报错；设备绑定 + 令牌吊销标记 |
+| 检索 | 笔记重要度 `importance` 加权（乘法，最高 +50%）；时间衰减 |
+| LLM | 问答 system prompt 加固（注入防护 + 引用路径只认资料段标注）；429 单独识别并重试；启动自检 `llm_model` 是否在上游模型清单（只告警不阻启动） |
+| MCP | 两份副本合并为同一份（16 个工具，补 `kb_update` 与记忆检索）；`brief()` 不再产出非法 JSON；`KB_MCP_TRANSPORT` 默认 `stdio`；新增 `/api/mcp-usage/report` |
+| 笔记 | 日期开头的非事件型笔记保留 `YYYY-MM-DD_` 前缀；`60-梦境` 进目录树与搜索；新建项目自动生成五段主文档 |
+| Web | 主题插件化、模板插件化、插件商城页、设置页按组重做；知识图谱去蜘蛛网化；`usage-boost` 两层目录过滤支持笔记名匹配 |
+
+### 生产部署（1.92）
+
+- 方式：打包复制（Release 未确认生成，见下方遗留）。包 `kb-1.0.4.tar.gz`，0.76 MB，
+  sha256 `493af865…2e9bd`，196 个文件，无个人数据与密钥。
+- 目标：`$KB_ROOT/releases/kb-1.0.4/`，`current` 软链切换，`.deploy-state.json`
+  记 `current=1.0.4 / previous=1.0.3`。
+- 回滚：`bash $KB_ROOT/release-deploy.sh --rollback`（或把 `current` 指回 `kb-1.0.3`）。
+
+### 验证
+
+- 仓库侧：`guard.py all` 通过；`compileall scripts tests` 0 错误；
+  `test_version_consistency.py` 5 项 PASS；`pytest tests/ scripts/tests/` → 599 passed, 2 skipped。
+- 生产侧：`/health` → `version=1.0.4`、`indexed≈1806`；`/api/notes/tree` 2125 条；
+  `60-梦境` 25 篇可见；`/api/graph` meta 正常（2156 节点 / 112 wiki / 4730 语义）；
+  `/api/mcp-usage` 390 次调用；`/search` 正常；`/api/llm/ask` 返回完整答案 + 16 条引用。
+- **日期前缀（本轮主目标）**：带 `dir` 上传 `2026-10-22 部署验收B2.md` →
+  实际落盘 `20-知识/2026-10-22_部署验收B2.md`，日期前缀保留。改前同名文件会变成
+  `部署验收B2.md`。验收用临时笔记已删除，无残留。
+
+### 遗留
+
+- `v1.0.4` tag 已推上 GitHub 并指向 `2ba68e1`，但 Release 未确认生成（匿名 API 对私有仓
+  一律 404，无法从本机判断是「CI 未完成」还是「CI 失败」）。Release 生成后，
+  生产下次可改走 `release-deploy.sh --version X` 正规链路。
+- 上传接口的既有设计：请求不带 `dir`（归属线索）时不接管规范化，按 `type` 直接落位，
+  此时日期前缀仍由原逻辑抹掉。只有带 `dir` 的写入才走规范化。
+
 ## 1.0.3
 
 2026-10-20 仓库更名为 **lingxi（灵犀）**。
