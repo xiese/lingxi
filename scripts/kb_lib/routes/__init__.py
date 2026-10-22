@@ -2,7 +2,7 @@
 
 import sys, re, subprocess, threading, time as _time, secrets
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, current_app, g
 
@@ -296,7 +296,19 @@ def build_qa_context(q, top=5, max_chars=24000, with_citations=False):
                     ch, ls, le, plen = item[0], item[1], item[2], 0
             else:
                 ch, ls, le, plen = item, None, None, 0
-            ctx_parts.append(f"[{path}]\n{ch}")
+            # 2026-10-22：资料段开头补上笔记日期。
+            # 背景：QA_SYSTEM_TEMPLATE 规则 3 写着「日期以资料段开头标注的日期为准」，
+            # 但这里原来只拼 [path]、没有日期 —— 规则 3 的前提根本不存在，
+            # 模型只能拿正文里自称的日期（往往是「本文写于 X」）当依据，
+            # 于是「现在是什么版本」这类时效问题会照旧资料答。
+            # 这里用 _note_epoch 读到的 frontmatter updated/created/date（与时间衰减同源，
+            # 不信 mtime）。读不到就不标，绝不编一个日期出来。
+            _ep = search_index._note_epoch(path)
+            if _ep:
+                _ds = datetime.fromtimestamp(_ep, timezone.utc).strftime("%Y-%m-%d")
+                ctx_parts.append(f"[{path}] (笔记日期: {_ds})\n{ch}")
+            else:
+                ctx_parts.append(f"[{path}] (笔记日期: 未标注)\n{ch}")
             if with_citations and ls is not None:
                 # quote 必须从本块真实起始处取：ch 前面可能拼了上一块的 overlap 尾巴，
                 # 若直接取 ch[:200]，引文会落在上一块的行上、与 line_start 错位。

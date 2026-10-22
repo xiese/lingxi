@@ -646,6 +646,7 @@ class SearchIndex:
         self.mtimes = {}
         self._date_cache = {}   # T4: rel -> epoch 秒（-1 = 无日期），惰性填、随索引清空
         self._importance_cache = {}  # T-23-a: rel -> 0.0~1.0，惰性填、随索引清空
+        self._meta_cache = {}  # 2026-10-22: rel -> 标题+标签小写文本，惰性填、随索引清空
         self.lock = threading.Lock()
         self.dirty = False
         self._index_version = 0  # 索引版本号，重建/增量更新时 bump，嵌入缓存 key 依赖此值避免脏缓存
@@ -879,6 +880,7 @@ class SearchIndex:
                 self.mtimes = mtimes
                 self._date_cache = {}   # T4: 全量重建，日期缓存整体失效
                 self._importance_cache = {}  # T-23-a: 同上
+                self._meta_cache = {}   # 2026-10-22: 标题/标签缓存同步清空
                 self._index_version += 1  # Bump: 失效旧嵌入缓存
                 self._token_sets = None    # 失效分词集合缓存
                 self._save_index()  # 锁内持久化，避免锁外写入时读到不一致状态
@@ -1421,6 +1423,7 @@ class SearchIndex:
         for _p in list(changed_paths or []) + list(removed or []):
             self._date_cache.pop(_p, None)
             self._importance_cache.pop(_p, None)  # T-23-a: 改了 importance 要立刻生效
+            self._meta_cache.pop(_p, None)  # 2026-10-22: 改了标题/标签要立刻生效
         self._index_version += 1  # Bump: 失效旧嵌入缓存
         self._token_sets = None    # 失效分词集合缓存
         self._save_index()  # 在锁内持久化，避免 search 线程读到不一致状态
@@ -1736,6 +1739,7 @@ class SearchIndex:
             self.paths, self.contents, self.mtimes = [], [], {}
             self._date_cache = {}   # T4: 索引清空，日期缓存一并失效
             self._importance_cache = {}  # T-23-a: 同上
+            self._meta_cache = {}   # 2026-10-22: 标题/标签缓存一并失效
             self.bm25 = None
             self.embeddings = None
             self.faiss_index = None
@@ -1873,7 +1877,12 @@ class SearchIndex:
         调用方据此区分「没查到」与「查失败」，不要把后者当空结果用。
         """
         try:
-            results = self._apply_importance(self._search_impl(query, top))
+            # 2026-10-22：链路 importance → 标题/标签加成。
+            # 索引剥掉了 frontmatter，标题和 tags 原来完全不参与检索；
+            # 这里补上「查询词命中标题/标签就加分」，让标题点题的短笔记能被召回。
+            results = self._apply_meta_boost(
+                self._apply_importance(self._search_impl(query, top)), query
+            )
             return (results, None) if with_status else results
         except SearchUnavailable as e:
             log.warning("检索不可用: %s", e)
@@ -1970,6 +1979,83 @@ class SearchIndex:
             val = 1.0
         self._importance_cache[rel] = val
         return val
+
+    def _note_meta_text(self, rel):
+        """2026-10-22：取笔记 frontmatter 的 title + tags，拼成可检索文本（惰性 + 缓存）。
+
+        背景（实测）：`_collect_docs` 会把 frontmatter 整段剥掉再入索引，
+        于是**标题和标签完全不参与检索**。后果：一篇标题写着「kb-1.0.4」的笔记，
+        正文里只要没再出现「知识库」「版本」这些词，按标题搜就永远搜不到。
+        抽 30 篇实测 6 篇的标题词不在正文里 —— 这些笔记等于「标题不可搜」。
+
+        这里只读文件头 `_FM_HEAD_BYTES`（不整篇 IO），与 `_note_epoch` /
+        `_note_importance` 同一套写法与缓存生命周期。
+        返回小写字符串；没有 title/tags 返回空串（此时不参与加权，行为不变）。
+        """
+        cached = self._meta_cache.get(rel)
+        if cached is not None:
+            return cached
+        txt = ""
+        try:
+            f = NOTES_DIR / rel
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                head = fh.read(_FM_HEAD_BYTES)
+            if head.startswith("---"):
+                m = re.match(r"^---\n(.*?)\n---", head, re.DOTALL)
+                if m:
+                    parts = []
+                    for line in m.group(1).split("\n"):
+                        k, _, v = line.partition(":")
+                        k = k.strip()
+                        if k in ("title", "tags", "canonical_tags", "aliases"):
+                            v = v.strip().strip('"').strip("'")
+                            if v and v != "[]":
+                                parts.append(v)
+                    txt = " ".join(parts).lower()
+        except Exception:
+            txt = ""
+        self._meta_cache[rel] = txt
+        return txt
+
+    def _apply_meta_boost(self, results, query):
+        """2026-10-22：查询词命中「标题/标签」时给该笔记加分（就地重排并返回）。
+
+        解决的是「标题可搜」缺失：正文没提但标题/tags 明确点题的笔记，
+        原来在向量和 BM25 两路都吃亏（正文太短、语义重心不在查询词上）。
+
+        计分：命中几个查询词就乘 (1 + 0.25 × 命中数)，上限 ×2.0。
+        用乘法保持与 importance/decay 一致的量纲，不把低分笔记直接顶到第一。
+        全部未命中时零开销原样返回。
+        """
+        if not results:
+            return results
+        q_tokens = {t for t in _tokenize(query) if len(t) >= 2}
+        if not q_tokens:
+            return results
+        changed = False
+        for r in results:
+            meta = self._note_meta_text(r.get("path"))
+            if not meta:
+                continue
+            hits = sum(1 for t in q_tokens if t in meta)
+            if not hits:
+                continue
+            boost = min(1.0 + 0.25 * hits, 2.0)
+            base = float(r.get("_importance_final",
+                               r.get("_decay_final",
+                                     r.get("display_score", r.get("score", 0.0)))))
+            r["_meta_hits"] = hits
+            r["_meta_final"] = round(base * boost, 6)
+            changed = True
+        if changed:
+            results.sort(
+                key=lambda x: x.get("_meta_final",
+                                    x.get("_importance_final",
+                                          x.get("_decay_final",
+                                                x.get("display_score", 0.0)))),
+                reverse=True,
+            )
+        return results
 
     def _apply_importance(self, results):
         """T-23-a：按 frontmatter `importance` 做加权排序（就地重排并返回）。

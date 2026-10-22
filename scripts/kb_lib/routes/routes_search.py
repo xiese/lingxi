@@ -190,6 +190,16 @@ def search_notes():
             if len(results) >= lim:
                 break
             try:
+                rel = str(f.relative_to(NOTES_DIR))
+            except ValueError:
+                rel = str(f)
+            # 2026-10-22：跳过 50-档案/_旧版本 下的历史副本。
+            # 背景：kb_update 每改一次就在 50-档案/_旧版本/ 留一份同名副本，
+            # 搜「1.0.4」13 条里 7 条是同一个笔记的旧副本，页面搜索框被刷屏。
+            # 只跳过 _旧版本 这一层，50-档案 下正常的归档笔记仍可搜到。
+            if rel.startswith("50-档案/_旧版本/"):
+                continue
+            try:
                 content = f.read_text(encoding="utf-8")
             except Exception:
                 log.debug("routes_search.py 异常: search_notes", exc_info=True)
