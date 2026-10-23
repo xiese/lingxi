@@ -132,7 +132,7 @@ def test_verify_empty_samples_not_flagged(tmp_path):
 
 
 def _iso_paths(tmp_path, monkeypatch):
-    pkl = tmp_path / ".search_index.pkl"
+    pkl = tmp_path / ".search_index.json"
     manifest = tmp_path / ".index_manifest.json"
     monkeypatch.setattr(search_mod, "INDEX_FILE", pkl, raising=False)
     monkeypatch.setattr(search_mod, "INDEX_MANIFEST_FILE", manifest, raising=False)

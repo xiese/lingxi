@@ -60,7 +60,7 @@ def _patch_paths_everywhere(tmp: Path, notes: Path):
         "TOKEN_FILE": tmp / ".api_tokens.json",
         "LOG_FILE": tmp / ".audit_log.jsonl",
         "SETTINGS_FILE": tmp / ".kb_settings.json",
-        "INDEX_FILE": tmp / ".search_index.pkl",
+        "INDEX_FILE": tmp / ".search_index.json",
         "EMBEDDINGS_FILE": tmp / ".embeddings.npy",
         "FAISS_FILE": tmp / ".faiss.index",
         "INDEX_MANIFEST_FILE": tmp / ".index_manifest.json",

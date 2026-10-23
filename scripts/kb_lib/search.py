@@ -1,6 +1,6 @@
 """知识库 API — 搜索索引（BM25 + BGE-M3 向量混合检索）"""
 
-import re, threading, pickle, time, hashlib, json, logging
+import os, re, threading, time, hashlib, json, logging
 from datetime import datetime, timezone
 import numpy as np
 from pathlib import Path
@@ -197,6 +197,147 @@ def _atomic_write_bytes(target, data: bytes):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, target)
+
+
+# ── 索引序列化：JSON（结构化）+ .npy（数值）──
+#
+# 旧格式是整包 pickle（`.search_index.pkl`），加载即执行任意代码：索引文件一旦
+# 被替换（下载目录、同步盘、备份还原），等于给攻击者一个 import 期执行点。
+# 新格式不执行代码：
+#   * 结构化部分（paths / contents / mtimes / BM25 参数与词表）→ JSON
+#   * 数值数组（BM25 的 doc_len / average_idf、doc_freqs 里的词频）→ .npz，
+#     读取一律 allow_pickle=False
+# BM25 模型不再整对象存盘，改为存「构造参数 + 统计量」，加载时用
+# _bm25_from_payload 重建对象（行为与 rank_bm25.BM25Okapi 构造后一致）。
+INDEX_FORMAT_VERSION = 2
+
+
+def _bm25_to_payload(bm25):
+    """把 BM25Okapi 拆成可 JSON 化的部分（返回 (json 部分, 数组部分)）。
+
+    doc_freqs 是「每篇一个 dict」，体量与语料同阶；这里转成
+    (行号, 词表下标, 词频) 三元组存进 npz，JSON 里词表只存一份，
+    避免同一个词在每篇里重复出现把文件撑大。
+    """
+    if bm25 is None:
+        return None, None
+    vocab = {}
+    rows, cols, vals = [], [], []
+    for i, df in enumerate(getattr(bm25, "doc_freqs", None) or []):
+        for term, freq in df.items():
+            j = vocab.setdefault(str(term), len(vocab))
+            rows.append(i)
+            cols.append(j)
+            vals.append(int(freq))
+    json_part = {
+        "k1": float(getattr(bm25, "k1", 1.5)),
+        "b": float(getattr(bm25, "b", 0.75)),
+        "epsilon": float(getattr(bm25, "epsilon", 0.25)),
+        "corpus_size": int(getattr(bm25, "corpus_size", 0)),
+        "avgdl": float(getattr(bm25, "avgdl", 0.0)),
+        "average_idf": float(getattr(bm25, "average_idf", 0.0)),
+        "idf": {str(k): float(v) for k, v in (getattr(bm25, "idf", None) or {}).items()},
+        "vocab": list(vocab.keys()),
+    }
+    arrays = {
+        "doc_len": np.asarray(getattr(bm25, "doc_len", []) or [], dtype=np.int64),
+        "df_row": np.asarray(rows, dtype=np.int64),
+        "df_col": np.asarray(cols, dtype=np.int64),
+        "df_val": np.asarray(vals, dtype=np.int64),
+    }
+    return json_part, arrays
+
+
+def _bm25_from_payload(json_part, arrays):
+    """由 _bm25_to_payload 的产物重建 BM25Okapi（不读 pickle、不执行代码）。"""
+    if not json_part:
+        return None
+    bm25 = BM25Okapi.__new__(BM25Okapi)
+    bm25.k1 = float(json_part.get("k1", 1.5))
+    bm25.b = float(json_part.get("b", 0.75))
+    bm25.epsilon = float(json_part.get("epsilon", 0.25))
+    bm25.corpus_size = int(json_part.get("corpus_size", 0))
+    bm25.avgdl = float(json_part.get("avgdl", 0.0))
+    bm25.average_idf = float(json_part.get("average_idf", 0.0))
+    bm25.idf = {str(k): float(v) for k, v in (json_part.get("idf") or {}).items()}
+    bm25.tokenizer = None
+    vocab = list(json_part.get("vocab") or [])
+    n_docs = int(arrays["doc_len"].shape[0]) if "doc_len" in arrays else 0
+    doc_freqs = [dict() for _ in range(n_docs)]
+    rows = arrays.get("df_row")
+    cols = arrays.get("df_col")
+    vals = arrays.get("df_val")
+    if rows is not None and cols is not None and vals is not None:
+        for r, c, v in zip(rows.tolist(), cols.tolist(), vals.tolist()):
+            if 0 <= int(r) < n_docs and 0 <= int(c) < len(vocab):
+                doc_freqs[int(r)][vocab[int(c)]] = int(v)
+    bm25.doc_freqs = doc_freqs
+    bm25.doc_len = arrays["doc_len"].tolist() if "doc_len" in arrays else []
+    return bm25
+
+
+def _index_arrays_path():
+    """数值数组文件路径：与 JSON 主索引同名前缀，避免再引一个配置常量。"""
+    return Path(str(INDEX_FILE) + ".arrays.npz")
+
+
+def _legacy_index_path():
+    """旧 pickle 索引路径：由 INDEX_FILE 推导，保证测试 patch 一个常量即可隔离。
+
+    `.search_index.json` → `.search_index.pkl`；测试里把 INDEX_FILE 指到
+    `tmp/.search_index.pkl` 时推导结果与原值相同（新格式就写在该路径）。
+    """
+    p = Path(INDEX_FILE)
+    return p if p.suffix == ".pkl" else p.with_suffix(".pkl")
+
+
+def _dump_index_payload(paths, contents, mtimes, bm25):
+    """把主索引写成新格式：`<INDEX_FILE>`（JSON）+ `<INDEX_FILE>.arrays.npz`。
+
+    两个文件都走「临时文件 + fsync + os.replace」，先写数组再写 JSON：
+    JSON 是加载方的入口，它出现即代表同批数组已经落盘。
+    """
+    json_part, arrays = _bm25_to_payload(bm25)
+    arrays_path = _index_arrays_path()
+    if arrays is None:
+        arrays = {"doc_len": np.asarray([], dtype=np.int64)}
+    tmp_npz = Path(str(arrays_path) + ".tmp")
+    arrays_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp_npz, "wb") as f:
+        # 压缩存：词频/偏移是稀疏小整数，压缩后体积明显小于未压缩 npz
+        np.savez_compressed(f, **arrays)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_npz, arrays_path)
+    payload = {
+        "format_version": INDEX_FORMAT_VERSION,
+        "bm25": json_part,
+        "paths": list(paths or []),
+        "contents": list(contents or []),
+        "mtimes": {str(k): float(v) for k, v in (mtimes or {}).items()},
+    }
+    # 紧凑分隔符：索引里以路径/词表为主，去掉多余空格能省下可观体积
+    _atomic_write_bytes(
+        INDEX_FILE,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+    )
+
+
+def _load_index_payload():
+    """读新格式主索引，返回 (payload, arrays)。
+
+    数组文件缺失或损坏按读取失败处理（返回 (None, None)），由调用方决定
+    是否全量重建；绝不回落到 pickle。
+    """
+    if not INDEX_FILE.exists():
+        return None, None
+    payload = json.loads(Path(INDEX_FILE).read_text(encoding="utf-8"))
+    arrays = {}
+    arrays_path = _index_arrays_path()
+    if arrays_path.exists():
+        with np.load(arrays_path, allow_pickle=False) as z:
+            arrays = {k: z[k] for k in z.files}
+    return payload, arrays
 
 
 # ── P1: 索引内容级抽检（2026-10-07）──
@@ -748,16 +889,8 @@ class SearchIndex:
         else:
             self.consistency_reason = reason if not ok else "ok"
 
-        # pkl
-        payload = pickle.dumps(
-            {
-                "bm25": self.bm25,
-                "paths": self.paths,
-                "contents": self.contents,
-                "mtimes": self.mtimes,
-            }
-        )
-        _atomic_write_bytes(INDEX_FILE, payload)
+        # 主索引（JSON + npz，不执行代码）
+        _dump_index_payload(self.paths, self.contents, self.mtimes, self.bm25)
 
         if write_embeddings and self.embeddings is not None and n_emb == n_paths:
             _atomic_np_save(EMBEDDINGS_FILE, self.embeddings)
@@ -816,15 +949,7 @@ class SearchIndex:
                 except Exception:
                     log.warning("search.py 异常: _save_index", exc_info=True)
                     n_faiss = 0
-            payload = pickle.dumps(
-                {
-                    "bm25": self.bm25,
-                    "paths": self.paths,
-                    "contents": self.contents,
-                    "mtimes": self.mtimes,
-                }
-            )
-            _atomic_write_bytes(INDEX_FILE, payload)
+            _dump_index_payload(self.paths, self.contents, self.mtimes, self.bm25)
             self._recompute_consistency()
             # P1（2026-10-07）：内容级抽检——计数一致不代表不错位（09-29 事故）。
             # 均匀抽 20 篇，把索引内容的 SHA-256 记入 manifest，再与磁盘文件
@@ -1508,30 +1633,77 @@ class SearchIndex:
             _stale_cache["ts"] = time.time()
         return count
 
-    def _load_pkl_index(self):
-        """加载 pkl 主索引（bm25/paths/contents/mtimes），含旧格式 bm25 重建兜底。
+    def _migrate_legacy_pickle(self):
+        """把旧 pickle 主索引一次性迁到新格式（JSON + npz），返回是否成功。
 
-        返回 loaded：INDEX_FILE 存在且 pickle 读取成功。读取异常只记日志、
-        保持 loaded=False，由调用方决定走 build 全量重建。对 self 的赋值
-        （bm25/paths/contents/mtimes/_token_sets）与拆分前内联实现一致；
-        旧索引有 contents 但无 bm25 时，立即分词重建并落盘。
+        只有「INDEX_FILE 存在但按 JSON 读不出来」时才会走到这里。读到后立刻
+        按新格式重写，并把旧文件改名为 `<INDEX_FILE>.legacy` 保留（不删除，
+        便于回滚核对）。迁移只发生一次，之后加载永远不再碰 pickle。
+
+        TODO(下个版本): 删除本函数与对旧格式的读取，旧 `.legacy` 文件由运维清理。
+        """
+        import pickle  # 局部导入：仅迁移路径使用，主流程不依赖 pickle
+        src = _legacy_index_path()
+        if not src.exists():
+            return False
+        try:
+            with open(src, "rb") as f:
+                d = pickle.load(f)
+        except Exception:
+            log.warning("旧索引文件无法按旧格式读取，放弃迁移: %s", src, exc_info=True)
+            return False
+        if not isinstance(d, dict):
+            log.warning("旧索引内容不是字典，放弃迁移: %s", type(d).__name__)
+            return False
+        with self.lock:
+            self.bm25 = d.get("bm25")
+            self.paths = d.get("paths", [])
+            self.contents = d.get("contents", [])
+            self.mtimes = d.get("mtimes", {})
+            self._token_sets = None  # 分词集合不入盘，置脏按需重建
+        legacy = Path(str(src) + ".legacy")
+        try:
+            os.replace(src, legacy)
+        except OSError:
+            log.warning("旧索引改名失败，放弃迁移: %s", src, exc_info=True)
+            return False
+        self._save_index()
+        log.warning(
+            "索引格式迁移：旧 pickle 索引已读入并重写为新格式（JSON + npz），"
+            "旧文件保留为 %s。TODO: 下个版本删除旧格式读取。", legacy,
+        )
+        return True
+
+    def _load_index_file(self):
+        """加载主索引（JSON + npz），含旧 pickle 一次性迁移与 bm25 重建兜底。
+
+        返回 loaded：新格式索引存在且读取成功（含迁移成功）。读取异常只记日志、
+        保持 loaded=False，由调用方决定走 build 全量重建。旧索引有 contents
+        但无 bm25 时，立即分词重建并落盘。
         """
         loaded = False
         if INDEX_FILE.exists():
             try:
-                with open(INDEX_FILE, "rb") as f:
-                    d = pickle.load(f)
-                    with self.lock:
-                        # 兼容新旧索引格式
-                        if "bm25" in d:
-                            self.bm25 = d["bm25"]
-                        self.paths = d.get("paths", [])
-                        self.contents = d.get("contents", [])
-                        self.mtimes = d.get("mtimes", {})
-                        self._token_sets = None  # pkl 不存分词集合，置脏按需重建
+                payload, arrays = _load_index_payload()
+                if payload is None:
+                    raise ValueError("索引为空")
+                if payload.get("bm25") and "doc_len" not in arrays:
+                    raise ValueError("索引数组文件缺失")
+                with self.lock:
+                    self.bm25 = _bm25_from_payload(payload.get("bm25"), arrays)
+                    self.paths = payload.get("paths", [])
+                    self.contents = payload.get("contents", [])
+                    self.mtimes = payload.get("mtimes", {})
+                    self._token_sets = None  # 索引不存分词集合，置脏按需重建
                 loaded = True
             except Exception:
-                log.warning("search.py 异常", exc_info=True)
+                # 兼容 INDEX_FILE 被指到 .pkl 的旧部署/测试：该路径本身就是旧格式
+                loaded = self._migrate_legacy_pickle()
+                if not loaded:
+                    log.warning("主索引读取失败，将全量重建: %s", INDEX_FILE, exc_info=True)
+        elif _legacy_index_path().exists():
+            # 新格式不存在、旧 pickle 在场：读一次旧文件，立即写成新格式并留 .legacy
+            loaded = self._migrate_legacy_pickle()
         # 兼容旧索引：若有 vectorizer 但无 bm25，触发重建
         if loaded and self.bm25 is None and self.contents:
             try:
@@ -1543,7 +1715,7 @@ class SearchIndex:
         return loaded
 
     def _check_pkl_consistency(self):
-        """A0 第一关：paths/contents 数量自检。
+        """A0 第一关：paths/contents 数量自检（方法名沿用旧称，读的是新格式）。
 
         不一致即置 index_consistent=False 并记 consistency_reason（不等
         向量面裁决）；返回 (ok, reason) 供无向量时的最终裁决复用。
@@ -1637,12 +1809,12 @@ class SearchIndex:
     def load(self):
         """索引加载主入口（薄编排）：pkl 加载 → 一致性自检 → 向量面裁决。
 
-        顺序与降级条件均与拆分前一致：先读 pkl（含旧格式 bm25 重建兜底），
+        顺序与降级条件均与拆分前一致：先读主索引（含旧格式迁移与 bm25 重建兜底），
         再自检 paths/contents，然后按条件读 npy / faiss，最后由
         _apply_vector_consistency 决定向量面去留并写回全局状态。
-        返回 loaded：pkl 存在且读取成功（调用方据此决定是否 build 全量）。
+        返回 loaded：主索引存在且读取成功（调用方据此决定是否 build 全量）。
         """
-        loaded = self._load_pkl_index()
+        loaded = self._load_index_file()
         ok_pc, reason_pc = self._check_pkl_consistency()
         embeddings = self._load_embeddings_npy()
         faiss_index = self._load_faiss_for(embeddings)

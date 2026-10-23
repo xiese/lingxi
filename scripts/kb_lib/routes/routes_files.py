@@ -13,10 +13,11 @@ from ..services import write_policy
 # ── 敏感文件下载保护 ──
 _SENSITIVE_FILE_MARKERS = (
     ".api_tokens.json", ".kb_settings.json", ".audit_log.jsonl",
-    ".kb_mcp_usage.jsonl", ".search_index.pkl", ".embeddings.npy",
+    ".kb_mcp_usage.jsonl", ".search_index.pkl", ".search_index.json",
+    ".search_index.json.arrays.npz", ".search_index.pkl.legacy", ".embeddings.npy",
     ".faiss.index", ".kb_auth_watch_state.json",
 )
-_SENSITIVE_EXTENSIONS = {".pkl", ".npy", ".index", ".sqlite3"}
+_SENSITIVE_EXTENSIONS = {".pkl", ".npy", ".npz", ".index", ".sqlite3"}
 _DOWNLOAD_ALLOWED_DIRS = {"笔记", "_assets"}  # 只允许下载笔记和资源目录下的文件
 
 

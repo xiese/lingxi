@@ -63,7 +63,7 @@ for mine in ("kb-index-init", "kb-token-cleanup", "kb-rate-cleanup"):
 created = sorted(p.name for p in root.iterdir())
 assert created == ["\u7b14\u8bb0"], f"import 产生了状态文件: {created}"
 assert getattr(kb_lib, "master_store", None) is None, "import 不应初始化 master_store"
-assert not (root / ".search_index.pkl").exists(), "import 不应加载/构建索引"
+assert not (root / ".search_index.json").exists(), "import 不应加载/构建索引"
 print("IMPORT_CLEAN_OK")
 """
 
@@ -91,10 +91,10 @@ kb_lib.start_background()
 deadline = time.time() + 120
 while time.time() < deadline:
     names = [t.name for t in threading.enumerate()]
-    if (root / ".search_index.pkl").exists() and any("_periodic_refresh_loop" in n for n in names):
+    if (root / ".search_index.json").exists() and any("_periodic_refresh_loop" in n for n in names):
         break
     time.sleep(0.2)
-assert (root / ".search_index.pkl").exists(), "索引文件未落盘（_init_index 未执行）"
+assert (root / ".search_index.json").exists(), "索引文件未落盘（_init_index 未执行）"
 
 names = [t.name for t in threading.enumerate()]
 for want in ("kb-token-cleanup", "kb-rate-cleanup", "kb-auth-limit-cleanup"):

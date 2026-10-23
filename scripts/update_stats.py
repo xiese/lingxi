@@ -221,7 +221,7 @@ def update_project_note(stats: dict) -> bool:
         f"- 仪表盘可见笔记: {stats['total_md']}；"
         f"文件系统 .md: {stats['total_on_disk']}\n"
         f"- 标签数: {stats['tags']}\n"
-        f"- 搜索索引: .search_index.pkl, 嵌入: .embeddings.npy, FAISS: .faiss.index\n"
+        f"- 搜索索引: .search_index.json (+ .arrays.npz), 嵌入: .embeddings.npy, FAISS: .faiss.index\n"
         f"- 统计同步时间: {now_str}{ver_suffix}\n"
     )
 

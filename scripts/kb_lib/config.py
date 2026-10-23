@@ -29,7 +29,7 @@ else:
 KB_ROOT = Path(os.environ.get("KB_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 _temp_file_lock = threading.Lock()
 NOTES_DIR = KB_ROOT / "笔记"
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 # ── 环境变量新旧名兼容（2026-10-07 KB_HOST 拆名）──
 #
 # KB_HOST 历史上同名双义：本文件用它表示「监听绑定地址」，kb_mcp_server.py
@@ -61,7 +61,10 @@ HOST = _env_with_legacy("KB_BIND", "KB_HOST", "127.0.0.1")
 KB_BIND = HOST
 PORT = int(os.environ.get("KB_PORT", "8899"))
 TOKEN_FILE = KB_ROOT / ".api_tokens.json"
-INDEX_FILE = KB_ROOT / ".search_index.pkl"
+# 主索引：JSON（结构化）+ `<INDEX_FILE>.arrays.npz`（数值数组），读取一律 allow_pickle=False。
+# 旧格式是整包 pickle（`.search_index.pkl`），加载即执行任意代码；加载路径保留一次性
+# 迁移（读旧文件、立刻写新格式、旧文件改名 .legacy），之后不再碰 pickle。
+INDEX_FILE = KB_ROOT / ".search_index.json"
 EMBEDDINGS_FILE = KB_ROOT / ".embeddings.npy"
 FAISS_FILE = KB_ROOT / ".faiss.index"
 # A0: 索引三产物一致性清单（paths/contents/embeddings/faiss 计数 + version）

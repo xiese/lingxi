@@ -26,7 +26,7 @@ _PATH_VALUES = {
     "TOKEN_FILE": ".api_tokens.json",
     "LOG_FILE": ".audit_log.jsonl",
     "SETTINGS_FILE": ".kb_settings.json",
-    "INDEX_FILE": ".search_index.pkl",
+    "INDEX_FILE": ".search_index.json",
     "EMBEDDINGS_FILE": ".embeddings.npy",
     "FAISS_FILE": ".faiss.index",
     "INDEX_MANIFEST_FILE": ".index_manifest.json",

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 import sys
 import types
 from pathlib import Path
@@ -29,7 +28,7 @@ import kb_lib.search as search_mod
 @pytest.fixture()
 def iso_index(tmp_path, monkeypatch):
     """把 INDEX/EMBEDDINGS/FAISS/MANIFEST 全部指到 tmp，并强制 embedding_type=llm。"""
-    pkl = tmp_path / ".search_index.pkl"
+    pkl = tmp_path / ".search_index.json"
     emb = tmp_path / ".embeddings.npy"
     faissf = tmp_path / ".faiss.index"
     manifest = tmp_path / ".index_manifest.json"
@@ -58,25 +57,30 @@ def iso_index(tmp_path, monkeypatch):
     }
 
 
-def _write_pkl(path: Path, n_paths: int):
+def _write_index(path: Path, n_paths: int):
+    """写新格式主索引（JSON + 空数组文件），不再使用 pickle。"""
     paths = [f"n{i}.md" for i in range(n_paths)]
     contents = [f"body-{i}" for i in range(n_paths)]
     mtimes = {p: float(i + 1) for i, p in enumerate(paths)}
-    path.write_bytes(
-        pickle.dumps(
+    path.write_text(
+        json.dumps(
             {
+                "format_version": 2,
                 "bm25": None,
                 "paths": paths,
                 "contents": contents,
                 "mtimes": mtimes,
-            }
-        )
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
     )
+    np.savez(Path(str(path) + ".arrays.npz"), doc_len=np.asarray([], dtype=np.int64))
 
 
 def test_load_rejects_mismatched_paths_and_embeddings(iso_index):
     """paths=2 / emb=3 时，load 不得把错位 embeddings 当可用向量。"""
-    _write_pkl(iso_index["pkl"], 2)
+    _write_index(iso_index["pkl"], 2)
     np.save(iso_index["emb"], np.random.randn(3, 8).astype(np.float32))
 
     si = search_mod.SearchIndex()
@@ -96,7 +100,7 @@ def test_load_rejects_mismatched_paths_and_embeddings(iso_index):
 
 
 def test_load_accepts_aligned_paths_and_embeddings(iso_index):
-    _write_pkl(iso_index["pkl"], 2)
+    _write_index(iso_index["pkl"], 2)
     np.save(iso_index["emb"], np.random.randn(2, 8).astype(np.float32))
 
     si = search_mod.SearchIndex()
@@ -175,3 +179,60 @@ def test_vec_search_skips_when_inconsistent(iso_index, monkeypatch):
     monkeypatch.setattr(search_mod, "_cached_embedding", boom)
     out = si._vec_search("hello", top=5)
     assert out == []
+
+
+def test_bm25_roundtrip_scores_identical(iso_index):
+    """新格式（JSON + npz）读写对称：重建的 BM25 打分与写入前逐位一致。"""
+    from rank_bm25 import BM25Okapi
+
+    docs = [["知识", "库", "索引"], ["索引", "格式"], ["知识", "图谱"]]
+    si = search_mod.SearchIndex()
+    si.paths = ["a.md", "b.md", "c.md"]
+    si.contents = ["知识 库 索引", "索引 格式", "知识 图谱"]
+    si.mtimes = {"a.md": 1.0, "b.md": 2.0, "c.md": 3.0}
+    si.bm25 = BM25Okapi(docs)
+    before = si.bm25.get_scores(["索引"])
+
+    si._save_index()
+    # 主索引是 JSON，不得是 pickle；数值数组走 npz 且 allow_pickle=False
+    raw = iso_index["pkl"].read_text(encoding="utf-8")
+    assert json.loads(raw)["format_version"] == 2
+    arrays = np.load(str(iso_index["pkl"]) + ".arrays.npz", allow_pickle=False)
+    assert arrays["doc_len"].tolist() == [3, 2, 2]
+
+    si2 = search_mod.SearchIndex()
+    assert si2.load() is True
+    after = si2.bm25.get_scores(["索引"])
+    assert np.allclose(before, after)
+    assert si2.paths == si.paths and si2.contents == si.contents
+
+
+def test_legacy_pickle_migrated_once_and_kept(iso_index, caplog):
+    """新格式缺失、旧 pickle 在场：读一次、写新格式、旧文件留 .legacy，并记 warning。"""
+    import pickle
+
+    legacy_path = iso_index["pkl"].with_suffix(".pkl")
+    legacy_path.write_bytes(
+        pickle.dumps(
+            {
+                "bm25": None,
+                "paths": ["old.md"],
+                "contents": ["旧内容"],
+                "mtimes": {"old.md": 9.0},
+            }
+        )
+    )
+    si = search_mod.SearchIndex()
+    with caplog.at_level("WARNING", logger="kb.search"):
+        assert si.load() is True
+    assert si.paths == ["old.md"]
+    assert iso_index["pkl"].exists(), "迁移后应写出新格式主索引"
+    assert json.loads(iso_index["pkl"].read_text(encoding="utf-8"))["format_version"] == 2
+    assert Path(str(legacy_path) + ".legacy").exists(), "旧文件应改名 .legacy 保留"
+    assert not legacy_path.exists()
+    assert any("迁移" in r.message for r in caplog.records)
+
+    # 第二次加载只读新格式，不再触发迁移
+    si2 = search_mod.SearchIndex()
+    assert si2.load() is True
+    assert si2.paths == ["old.md"]

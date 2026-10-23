@@ -32,7 +32,7 @@ def _patch_paths_everywhere(tmp: Path, notes: Path):
         mock.patch.object(C, "TOKEN_FILE", tmp / ".api_tokens.json"),
         mock.patch.object(C, "SETTINGS_FILE", tmp / ".kb_settings.json"),
         mock.patch.object(C, "LOG_FILE", tmp / ".audit_log.jsonl"),
-        mock.patch.object(C, "INDEX_FILE", tmp / ".search_index.pkl"),
+        mock.patch.object(C, "INDEX_FILE", tmp / ".search_index.json"),
         mock.patch.object(C, "INDEX_MANIFEST_FILE", tmp / ".index_manifest.json"),
     ]
     for mod_name in ("kb_lib.routes", "kb_lib.audit", "kb_lib.store", "kb_lib.search"):

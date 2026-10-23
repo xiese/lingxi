@@ -1,3 +1,26 @@
+## 1.0.8
+
+2026-10-23 发布。主索引去掉 pickle，改 JSON + npz（读取一律 `allow_pickle=False`）。
+
+### 改动
+
+| 类别 | 内容 |
+|---|---|
+| 安全 | 旧主索引是整包 pickle（`.search_index.pkl`），加载即执行任意代码：索引文件一旦被替换（下载目录、同步盘、备份还原），等于给攻击者一个 import 期执行点。现改为 `.search_index.json`（结构化）+ `.search_index.json.arrays.npz`（数值数组），读取 `allow_pickle=False` |
+| 安全 | BM25 不再整对象存盘，只存构造参数与统计量（`doc_len`、`idf`、词表、词频三元组），加载时重建对象 |
+| 兼容 | 旧格式一次性迁移：新格式不存在而旧 pickle 在场时，读一次旧文件、立即写新格式、旧文件改名 `.legacy` 保留；代码标注 TODO 下个版本删除旧格式读取 |
+| 配套 | `routes_files.py` 敏感文件清单加新格式（`.json` / `.arrays.npz` / `.pkl.legacy`），`_SENSITIVE_EXTENSIONS` 加 `.npz`；`kb_maintain.py` 保护清单同步；`update_stats.py` 描述文案同步 |
+
+### 验证
+
+- 用生产真实索引（1823 篇、20,184,770 字节 pkl）实测迁移：
+  - 迁移加载 2600 ms，新 JSON 13,675,006 字节 + npz 2,349,382 字节 = 16,024,388 字节（旧格式的 **79.4%**）
+  - 新格式二次加载 1440 ms，保存 2153 ms
+  - **打分逐位一致**：5 个查询（知识库版本 / 对杀分路 / 雪球跟刀 / 微信 QQ / 服务器）前 5 名与分数全部相同
+  - 二次加载时把 `pickle.load` 打成抛异常，加载仍成功 → 主流程不再碰 pickle
+- 新增 2 个用例（`test_bm25_roundtrip_scores_identical`、`test_legacy_pickle_migrated_once_and_kept`）
+- 全量 `pytest -q`：615 passed, 2 skipped
+
 ## 1.0.7
 
 2026-10-23 发布。鉴权只认 `Authorization` 头，去掉 `?token=` 查询参数回退。
