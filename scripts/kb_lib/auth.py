@@ -22,9 +22,15 @@ log = logging.getLogger("kb.auth")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
 
 def get_token():
-    """从请求中提取 Bearer Token（支持 Header 和 URL 参数）"""
+    """从请求中提取 Bearer Token（**只认 Authorization 头**）。
+
+    2026-10-23 起不再接受 `?token=` 查询参数：URL 会进浏览器历史、代理日志、
+    Referer 与监控采样，令牌一旦落到这些地方就无法收回。全仓已核查没有
+    必须靠查询参数传令牌的调用方（前端一律走 Authorization 头，SSE 走
+    fetch + POST + Authorization，下载与图片走 fetch + Blob），因此不留回退。
+    """
     a = request.headers.get("Authorization", "")
-    return a[7:] if a.startswith("Bearer ") else request.args.get("token", "")
+    return a[7:] if a.startswith("Bearer ") else ""
 
 
 # ── C1：设备绑定（台账 #22）──

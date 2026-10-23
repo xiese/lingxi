@@ -29,7 +29,7 @@ else:
 KB_ROOT = Path(os.environ.get("KB_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 _temp_file_lock = threading.Lock()
 NOTES_DIR = KB_ROOT / "笔记"
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 # ── 环境变量新旧名兼容（2026-10-07 KB_HOST 拆名）──
 #
 # KB_HOST 历史上同名双义：本文件用它表示「监听绑定地址」，kb_mcp_server.py

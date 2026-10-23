@@ -1,3 +1,20 @@
+## 1.0.7
+
+2026-10-23 发布。鉴权只认 `Authorization` 头，去掉 `?token=` 查询参数回退。
+
+### 改动
+
+| 类别 | 内容 |
+|---|---|
+| 安全 | `kb_lib/auth.py` 的 `get_token()` 不再接受 `?token=` 查询参数，只认 `Authorization: Bearer`。URL 会进浏览器历史、代理日志、`Referer` 与监控采样，令牌一旦落到这些地方就无法收回 |
+| 安全 | `routes/routes_admin.py` 的 `/admin/debug-auth` 改用同一个 `get_token()`，不再自行读查询参数 |
+
+### 核查
+
+- 全仓无调用方依赖查询参数：前端 `app.js` 一律 `Authorization` 头；SSE 走 `fetch + POST + Authorization`（无 `EventSource`）；下载与图片走 `fetch + Blob`；`kb-cli`、MCP 桥、`scripts/*.py` 均走 Header。
+- 新增 `tests/test_auth_header_only.py`：4 项（`get_token` 只认头、受保护路由带真实令牌的 `?token=` 必须 401、master 路由必须 401/403、Header 路径回归）。红绿已验证：退回原版 3 项 FAIL，恢复后 4 项 PASS。
+- 全量 `pytest -q`：613 passed, 2 skipped。
+
 ## 1.0.6
 
 2026-10-23 发布。补上 1.0.4 里「未推送、未部署」的四处检索问答修复，并收窄写入规范化落点判据。

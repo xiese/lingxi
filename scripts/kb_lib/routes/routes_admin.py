@@ -22,7 +22,7 @@ from ..audit import (
 )
 from ..search import search_index, get_rebuild_status
 from ..llm import llm_chat_with_retry
-from ..auth import require_master, parse_fm, client_ip
+from ..auth import require_master, parse_fm, client_ip, get_token
 from ..push_qq import send_qq_message
 
 
@@ -246,8 +246,9 @@ def debug_auth():
     # 只返回判定结果，不回显任何凭据片段。master token 由 token_urlsafe(40)
     # 生成（约 54 字符），"Bearer "+tk 约 61 字符 < 原来的 80 截断上限，
     # 因此旧实现的 auth_header 是完整明文，all_headers 同理。
+    # 2026-10-23：改走 get_token()，与全站鉴权同一口径（只认 Authorization 头）。
     a = request.headers.get("Authorization", "")
-    tk = a[7:] if a.startswith("Bearer ") else request.args.get("token", "")
+    tk = get_token()
     return jsonify({
         "auth_header_present": bool(a),
         "auth_scheme": a.split(" ", 1)[0] if a else "",
