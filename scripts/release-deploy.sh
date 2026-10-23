@@ -94,6 +94,71 @@ restart_services() {
   return 1
 }
 
+# ── 索引格式适配（1.0.8 起主索引换格式，回滚必须一起处理）──
+# 1.0.7 及更早：整包 pickle，只认 <KB_ROOT>/.search_index.pkl
+# 1.0.8 及更新：JSON + npz，认 <KB_ROOT>/.search_index.json（+ .arrays.npz）
+# 两个方向都不能只切软链：
+#   * 往旧版回滚：旧版看不到 .json，会当成索引缺失 → 全量重建（1823 篇实测约 40 秒，
+#     分词占 35 秒），期间检索不可用，而 /health 照样 200，看不出问题。
+#   * 回滚后再往新版升：新版看到残留的 .json 就直接用，读到的是回滚前的过期索引。
+# 处理办法：往旧版回滚时由 .pkl.legacy 复制出 .pkl（原件保留，可反复回滚），
+# 并把新版 JSON 归档改名，让再升级时走「一次性迁移」拿到最新数据。
+INDEX_SWITCH_VER="1.0.8"
+
+index_format_of() {
+  # 版本 >= 1.0.8 → json；否则 pickle。用 sort -V 比较，不手写版本解析
+  if [ "$(printf '%s\n%s\n' "$1" "$INDEX_SWITCH_VER" | sort -V | head -1)" = "$INDEX_SWITCH_VER" ]; then
+    echo "json"
+  else
+    echo "pickle"
+  fi
+}
+
+prepare_index_for() {
+  # $1 = 目标版本，$2 = 回滚前的版本（用于归档命名）
+  local ver="$1" from="$2"
+  local fmt pkl legacy js npz
+  fmt="$(index_format_of "$ver")"
+  pkl="$KB_ROOT/.search_index.pkl"
+  legacy="$KB_ROOT/.search_index.pkl.legacy"
+  js="$KB_ROOT/.search_index.json"
+  npz="$KB_ROOT/.search_index.json.arrays.npz"
+
+  if [ "$fmt" = "pickle" ]; then
+    if [ ! -f "$pkl" ] && [ -f "$legacy" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "（dry-run）索引适配：.search_index.pkl.legacy → 复制出 .search_index.pkl"
+      else
+        cp -a "$legacy" "$pkl" || return 1
+        green "  索引适配：由 .pkl.legacy 复制出 .search_index.pkl（原件保留）"
+      fi
+    elif [ ! -f "$pkl" ] && [ ! -f "$legacy" ]; then
+      yellow "  索引适配：既无 .pkl 也无 .pkl.legacy，目标版会全量重建（1823 篇约 40 秒）"
+    fi
+    # 旧版只认 .pkl；把新版 JSON 归档，避免再升级时读到过期索引
+    if [ -f "$js" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "（dry-run）索引适配：.search_index.json → .search_index.json.from-$from"
+      else
+        mv "$js" "$js.from-$from" || return 1
+        green "  索引适配：.search_index.json → .search_index.json.from-$from"
+      fi
+    fi
+    if [ -f "$npz" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "（dry-run）索引适配：.arrays.npz → .arrays.npz.from-$from"
+      else
+        mv "$npz" "$npz.from-$from" || return 1
+        green "  索引适配：.search_index.json.arrays.npz → .arrays.npz.from-$from"
+      fi
+    fi
+  else
+    # 往 1.0.8+ 回滚：新版只认 .json，旧 .pkl 会被一次性迁移逻辑接管，这里不动
+    yellow "  索引适配：目标版用 JSON 索引，残留 .pkl 由一次性迁移接管，无需手工处理"
+  fi
+  return 0
+}
+
 do_rollback() {
   local prev cur
   prev="$(python3 -c "import json;print(json.load(open('$STATE_FILE')).get('previous',''))" 2>/dev/null || echo '')"
@@ -103,7 +168,9 @@ do_rollback() {
     die "上一版与当前版相同（$prev），没有可回滚的目标"
   fi
   yellow "回滚到 $prev（当前 $cur）"
-  [ "$DRY_RUN" = "1" ] && { echo "（dry-run）会把 current → kb-$prev"; return 0; }
+  [ "$DRY_RUN" = "1" ] && { echo "（dry-run）会把 current → kb-$prev"; prepare_index_for "$prev" "$cur"; return 0; }
+  # 先备好索引再切软链：切完立刻重启，中间不留「代码已换、索引没到位」的窗口
+  prepare_index_for "$prev" "$cur" || die "索引格式适配失败，未切换版本"
   ln -sfn "$RELEASES_DIR/kb-$prev" "$CURRENT_LINK"
   # 回滚后 current=prev，previous 记成刚被换下的版本，这样还能再往前退一次
   write_state "$prev" "$cur"
