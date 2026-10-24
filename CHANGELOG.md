@@ -1,3 +1,38 @@
+## 1.0.11
+
+2026-10-25 发布。修复增量嵌入的行号越界（生产表现为「服务活着但搜索全挂」）。
+
+### 背景
+
+生产 1.92:8899 出现「进程 active、`/health` 有时还回 200，但搜索请求全部超时」的形态。
+根因不是死锁：
+
+```
+File "search.py", line 1311, in build_embeddings_incremental
+    self.embeddings = self.embeddings[keep_indices]
+IndexError: index 1867 is out of bounds for axis 0 with size 1867
+```
+
+`keep_indices` 按 `ref_paths` 的长度（N）计算行号，而 `self.embeddings` 可能只有 N-1 行
+（上一次增量/落盘异常留下的错位状态）。直接索引 → `IndexError` → 被外层 `except` 吞掉
+→ 降级做全量重建。全量重建是 40 秒级，waitress 线程被占满，队列堆到 7 层，
+所有请求超时。**每一次增量刷新都会触发一次全量重建**，所以看起来像永久卡死。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_lib/search.py` | `build_embeddings_incremental` 在算 `keep_indices` 之前加行数前置校验：`embeddings.shape[0] != len(ref_paths)` 时记 `增量嵌入跳过` 并显式降级全量重建，不再靠抛异常被吞掉来降级 |
+| `tests/test_incremental_delete_bounds.py` | 新增 3 条回归：错位不抛 `IndexError`、错位走前置校验分支、对齐状态下纯删除的向量按 `keep_indices` 剪对行 |
+
+### 说明
+
+- **只断言「`build_embeddings` 被调用」是假绿**——修复前后两条路都会调用它。真正的判据是日志走哪条：
+  修复前额外出现 `索引保存失败`，修复后只有 `增量嵌入跳过`。
+- 红→绿→再红三步证：`3 passed` → 摘掉校验 `1 failed, 2 passed` → 还原 `3 passed`。
+- 泛化教训：**「异常被 `except` 吞掉 → 降级」在「降级成本远高于异常本身」时会放大成雪崩**。
+  判据是「降级路径代价 × 触发频率」，排查入口是数降级分支的日志条数，不是看 health 返回码。
+
 ## 1.0.10
 
 2026-10-24 发布。四项新能力：三层提示词、梦境设置面板、想法收集箱、桌面端布局。

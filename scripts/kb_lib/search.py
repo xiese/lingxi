@@ -1298,6 +1298,20 @@ class SearchIndex:
             # 使用 old_paths（传入的 pre-update 路径列表）构建索引映射，
             # 避免 self.paths 已更新导致 old_emb 与路径索引错位
             ref_paths = old_paths if old_paths is not None else self.paths
+            # 行数前置校验（2026-10-25）：keep_indices 是按 ref_paths 的长度算的，
+            # 而 self.embeddings 可能比它少行（上一次增量/落盘异常留下的错位状态）。
+            # 不先校验就直接 self.embeddings[keep_indices]，会抛
+            #   IndexError: index N is out of bounds for axis 0 with size N
+            # 该异常被下面的 except 吞掉后走全量重建 —— 于是「每次刷新都全量重建」，
+            # waitress 线程被 40 秒级重建占满，表现成服务活着但所有请求超时
+            # （生产 2026-10-25 03:21 实测：队列堆到 7 层）。
+            # 这里显式识别错位并降级，语义与「增量不可用」一致，不改变正确性。
+            if int(self.embeddings.shape[0]) != len(ref_paths):
+                log.warning(
+                    "增量嵌入跳过：embeddings 行数(%d) 与 ref_paths(%d) 不一致，降级全量重建",
+                    int(self.embeddings.shape[0]), len(ref_paths),
+                )
+                return self.build_embeddings()
             keep_indices = list(range(len(ref_paths)))
             if removed:
                 keep_indices = [i for i in keep_indices if ref_paths[i] not in removed]
