@@ -1,3 +1,29 @@
+## 1.0.10
+
+2026-10-24 发布。四项新能力：三层提示词、梦境设置面板、想法收集箱、桌面端布局。
+
+### 背景
+
+1.0.9 的 tag 由 `2a937d6`（部署脚本修复）触发，当时四项新功能尚未提交，包内不含这些代码。本版补齐。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_lib/prompts/{system,retrieval,output}.md` | 新增三层提示词文件，按「系统层 → 检索层 → 输出层」拆分 |
+| `scripts/kb_lib/llm.py` | 新增 `load_prompt_layer()` / `build_layered_system_prompt()`，带缓存与缺失降级 |
+| `scripts/kb_lib/routes/routes_llm.py` | 问答改走分层拼装，不再用单一模板常量 |
+| `scripts/kb_lib/routes/routes_admin.py` | 梦境设置键全量读写（19 键），敏感键只回显占位 |
+| `scripts/web/app.js`、`index.html` | 梦境设置面板 |
+| `scripts/kb_mcp_server.py` | 新增 `kb_idea` 工具：追加到当天待办页「想法收集箱」小节，自动建页、保序 |
+| `scripts/web/themes/base.css` | 新增 `>=1024 / 1280 / 1600` 桌面断点；手机端 `<=768` 规则未改 |
+| `scripts/web/themes/aurora.css` | 配色调整（仅色值） |
+
+### 说明
+
+- 三层提示词顺序固定 `system → retrieval → output`，任一文件缺失时降级为空串并继续，不阻断问答。
+- 想法箱只往 `笔记/30-记录/<当天>-待办.md` 的「想法收集箱」小节追加，不动其它小节。
+
 ## 1.0.9
 
 2026-10-23 发布。回滚脚本补上索引格式适配，1.0.8 换索引格式后回滚不再触发全量重建。
