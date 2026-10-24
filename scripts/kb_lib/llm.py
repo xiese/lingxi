@@ -4,11 +4,72 @@ import json, math, time, random
 import logging
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from .config import load_settings
 
 
 log = logging.getLogger("kb.llm")
+
+
+# ── 三层问答提示词（2026-10-24）──
+#
+# 背景：问答提示词原来是一整块字面量（routes_llm.py 的 QA_SYSTEM_TEMPLATE），
+# 系统边界、检索约束、输出格式混在同一段里，改一层要动全文，也没法单独 review。
+# 现按拍板口径拆成三层独立文件，拼接顺序固定 system → retrieval → output：
+#   ① 系统层 system.md    —— 不许编、不许跨库、只用库内事实（含「两份文档规则」）
+#   ② 检索层 retrieval.md —— 先召回再答、路径必须真实
+#   ③ 输出层 output.md    —— 带路径和日期、冲突取新
+# 只改提示词的组织方式：检索算法 / embedding / 排序一律不碰。
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PROMPT_LAYERS = ("system", "retrieval", "output")
+_PROMPT_CACHE = {}
+
+
+def _strip_prompt_comment(text):
+    """去掉文件开头的 `<!-- ... -->` 说明块 —— 那是写给人看的，不进模型上下文。"""
+    t = text.lstrip("\ufeff").lstrip()
+    if t.startswith("<!--"):
+        end = t.find("-->")
+        if end != -1:
+            t = t[end + 3:]
+    return t.strip()
+
+
+def load_prompt_layer(name):
+    """读一层提示词（去注释、缓存）。缺失时返回空串并告警，不阻断问答。"""
+    if name in _PROMPT_CACHE:
+        return _PROMPT_CACHE[name]
+    fp = PROMPTS_DIR / f"{name}.md"
+    try:
+        raw = fp.read_text(encoding="utf-8")
+    except Exception:
+        log.warning("提示词层缺失或不可读: %s", fp, exc_info=True)
+        _PROMPT_CACHE[name] = ""
+        return ""
+    text = _strip_prompt_comment(raw)
+    _PROMPT_CACHE[name] = text
+    return text
+
+
+def build_layered_system_prompt(**fields):
+    """按 system → retrieval → output 固定顺序拼三层，返回拼好的 system 提示词。
+
+    fields 用于替换各层里的 {today} / {weekday} 等占位符；替换失败按原文使用，
+    不让 KeyError 把问答打挂。
+    """
+    parts = []
+    for name in PROMPT_LAYERS:
+        text = load_prompt_layer(name)
+        if not text:
+            continue
+        if fields:
+            try:
+                text = text.format(**fields)
+            except (KeyError, IndexError, ValueError):
+                log.warning("提示词层 %s 占位符替换失败，按原文使用", name, exc_info=True)
+        parts.append(text)
+    return "\n\n".join(parts)
 
 # 429 退避参数：指数增长 + 抖动（避免多实例同时重试再撞限流）。
 _RATE_LIMIT_BASE = 1.5      # 首次退避基数（秒）

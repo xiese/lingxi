@@ -434,3 +434,49 @@
 .kb-shell .sr-badge .ki-e,.kb-shell .tag-item .ki-e{width:1em;height:1em;margin-right:.25em}
 
 .kb-shell #dropZone .text-4xl .ki-e{width:40px;height:40px;margin:0;color:var(--c-acc);stroke-width:1.6}
+
+/* ═════════ 桌面端布局 v1.4（2026-10-24 T105）═════════
+   只作用于 ≥1024px 的桌面宽度；≤768px 的手机端规则一字未动，
+   768–1023px 的平板也保持原样。全部是尺寸/间距，不含任何交互逻辑。
+   经典主题（不带 .kb-shell）不套用本段，仍是原版布局。 */
+@media (min-width:1024px){
+  /* 侧栏：216 → 240，留出图标与文字之间的呼吸位（只在 ≥1280 加宽，
+     1024–1279 维持 216，否则详情区会被挤到 230px 左右） */
+  .kb-shell .sidebar{padding:18px 14px!important;gap:4px!important}
+  .kb-shell .kb-sb{padding:10px 13px}
+  .kb-shell .kb-sb .ki{width:19px;height:19px}
+  .kb-shell .kb-sb-h{padding:18px 13px 6px;letter-spacing:.1em}
+
+  /* 主区：24px 统一内边距 → 上下 28 / 左右 32，避免卡片贴边 */
+  .kb-shell main{padding:28px 32px}
+
+  /* 卡片密度：内边距略增、圆角略收、统计卡间距 16 → 18 */
+  .kb-shell main .card.p-6{padding:22px 24px!important}
+  .kb-shell #dc{gap:18px!important;margin-bottom:22px!important}
+  .kb-shell #tab-dash>.grid{gap:18px!important}
+  .kb-shell main .card h3.text-lg,.kb-shell main .card>h3{margin-bottom:16px!important}
+
+  /* 笔记三栏：目录行高 5/6 → 6/8（宽度在 ≥1280 那一段加） */
+  .kb-shell #noteDirPanel{padding:14px!important}
+  .kb-shell #nt>div{padding:6px 8px!important}
+  .kb-shell #nv{min-width:0}
+
+  /* 正文：字号 15.5 → 16、行高 1.8 → 1.85，并给阅读宽度设上限，
+     1920px 下不再让一行排到 1100px 以上。限宽后整列居中，
+     避免正文靠左、卡片右侧空出一大片。 */
+  .kb-shell #nv>*{max-width:860px;margin-left:auto;margin-right:auto}
+  .kb-shell .note-content{font-size:16px;line-height:1.85}
+  .kb-shell .note-content h1{font-size:23px}
+  .kb-shell .note-content h2{font-size:19px;margin:24px 0 10px}
+  .kb-shell .note-content h3{font-size:16.5px}
+}
+
+@media (min-width:1280px){
+  .kb-shell .sidebar{width:240px}
+}
+
+/* 目录栏与右侧大纲只在 ≥1600 加宽：1440 下三栏都加会把正文挤到 650 以内 */
+@media (min-width:1600px){
+  .kb-shell #noteDirPanel{width:248px!important}
+  .kb-shell #tocPanel{width:208px!important}
+}

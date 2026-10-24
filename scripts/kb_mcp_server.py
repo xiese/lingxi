@@ -5,7 +5,12 @@ Wraps the Knowledge Base REST API as MCP tools.
 """
 import json
 import logging
+import sys
 import base64
+import contextlib
+import hashlib
+import tempfile
+import threading
 import os
 import mimetypes
 import urllib.parse
@@ -15,6 +20,11 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # Windows 无 fcntl：退化为仅进程内互斥
+    fcntl = None
 
 from fastmcp import FastMCP
 
@@ -229,6 +239,8 @@ TOKEN_FILE = Path(os.environ.get("KB_TOKEN_FILE", _KB_ROOT / ".api_tokens.json")
 USAGE_LOG = Path(os.environ.get("KB_MCP_USAGE_LOG", _KB_ROOT / ".kb_mcp_usage.jsonl"))
 CLIENT_NAME = os.environ.get("KB_CLIENT_NAME", "unknown").strip() or "unknown"
 READONLY = os.environ.get("KB_MCP_READONLY", "").strip().lower() in ("1", "true", "yes", "on")
+# 命令行直呼模式（--idea）：没有 HTTP 请求上下文，取令牌时跳过请求头那两步。
+_CLI_MODE = len(sys.argv) > 1 and sys.argv[1] in ("--idea", "-i")
 
 
 log = logging.getLogger("kb.kb_mcp_server")
@@ -310,7 +322,11 @@ def log_usage(tool: str, ok: bool = True, **extra):
 
 def _token_from_request_context() -> str:
     """Prefer the Bearer presented by the current MCP HTTP/SSE client."""
-    # 1) FastMCP access token (StaticTokenVerifier puts raw token string here)
+    # 命令行直呼（--idea）没有 HTTP 请求上下文：直接跳过，免得每次调用刷 4 条
+    # "No active HTTP request found" 的堆栈到 stderr（QQ 侧会把 stderr 当日志收）。
+    if _CLI_MODE:
+        return ""
+    # 1. FastMCP access token (StaticTokenVerifier puts raw token string here)
     try:
         from fastmcp.server.dependencies import get_access_token
 
@@ -442,8 +458,10 @@ def brief(obj, max_chars: int = 12000) -> str:
             if best2 is not None:
                 return dump(best2)
         # 兜底：最小合法对象
+        # 2026-10-24：etag 是写入乐观锁的版本号，正文被截掉也必须留下，
+        # 否则长笔记读回来拿不到版本号，调用方只能盲写（等于没有锁）。
         minimal = {"truncated": True, "error": f"结果超过 {max_chars} 字符，已省略正文"}
-        for k in ("count", "total", "mode", "directory"):
+        for k in ("count", "total", "mode", "directory", "path", "title", "etag"):
             if k in obj:
                 minimal[k] = obj[k]
         return dump(minimal)
@@ -487,6 +505,7 @@ def format_search_markdown(res: dict, query: str) -> str:
                 lines.append(f"  - L{m.get('line', '?')}: {ctx}")
         lines.append("")
     lines.append("下一步建议：如果要引用细节，请调用 `kb_read(path)` 读取对应笔记。")
+    lines.append("要改写其中某一篇时，先 `kb_read(path)` 取回 etag，再 `kb_update(path, content, base_hash=etag)`，避免覆盖别人的并发修改。")
     return "\n".join(lines)
 
 
@@ -789,6 +808,10 @@ def kb_read(path: str) -> str:
 
     读回来先看第一行：若写着「本文只做指针」「主文在 …」，说明正文不在这一篇，
     必须顺着路径去读主文，不要把摘要当完整事实回答。
+
+    返回值里的 `etag` 是这篇笔记当前的版本号（内容 sha256 前 16 位）。
+    要改写它时把该值传给 `kb_update(..., base_hash=etag)`：期间若被别人改过，
+    服务端会返回版本冲突而不是静默覆盖。
     """
     p = urllib.parse.quote(path)
     res = api("GET", f"/notes/{p}")
@@ -909,8 +932,72 @@ def kb_create(title: str, content: str, note_type: str = "knowledge", subdir: st
     return brief(res, 12000)
 
 
+# ── 同一篇笔记的乐观锁写入串行化（2026-10-24）──
+# 后端 save_note 是「读当前内容 → 校验 base_hash → 落盘」，三步之间没有锁。
+# 两个请求同时到达时可能都读到旧内容、都通过校验 → 双双 200，后写的静默覆盖先写的。
+# 实测（临时库、两个线程同时 kb_update、同 base_hash、内容互不相同）：20 轮里
+# 12 轮出现 (200, 200)，即乐观锁在最需要它的场景下漏掉 60%。
+# 这里在客户端按「笔记路径」串行：进程内 threading.Lock + 跨进程 flock，
+# 让第二个请求在第一个落盘之后才做校验，从而稳定拿到 409。
+# 只对带 base_hash 的调用生效：不带版本号的旧行为（直接覆盖）一字不动。
+_UPDATE_LOCKS = {}
+_UPDATE_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _serialize_note_write(path: str):
+    """同一篇笔记的乐观锁写入串行：先进程内互斥，再跨进程 flock。
+
+    flock 文件放在系统临时目录，按「上游地址 + 笔记路径」哈希命名；进程退出时
+    内核自动释放，不会留下死锁。没有 fcntl 的平台退化为仅进程内互斥。
+    """
+    with _UPDATE_LOCKS_GUARD:
+        lk = _UPDATE_LOCKS.setdefault(path, threading.Lock())
+    with lk:
+        lock_fp = None
+        try:
+            if fcntl is not None:
+                key = hashlib.sha256((KB_API_BASE + "\n" + path).encode("utf-8")).hexdigest()[:16]
+                ldir = Path(tempfile.gettempdir()) / "kb-mcp-write-locks"
+                ldir.mkdir(parents=True, exist_ok=True)
+                lock_fp = open(ldir / (key + ".lock"), "a+")
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if lock_fp is not None:
+                try:
+                    fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+                finally:
+                    lock_fp.close()
+
+
+def _version_conflict(res: dict, path: str) -> dict:
+    """把后端 409 version_conflict 翻成调用方看得懂、能照做的冲突信息。
+
+    字段口径与 REST 一致（expected = 服务端当前版本，provided = 你提交的版本），
+    额外补中文 message / hint，避免调用方只看到一句 error。
+    """
+    current = res.get("expected") or res.get("current_etag") or ""
+    provided = res.get("provided") or res.get("base_hash") or ""
+    out = dict(res)
+    out.update({
+        "error": "version_conflict",
+        "http_status": 409,
+        "message": "版本冲突：这篇笔记在你读取之后已被他人修改，本次写入未落盘。",
+        "path": path,
+        "current_version": current,
+        "your_version": provided,
+        "hint": (
+            "请先 kb_read(path=%r) 取最新 etag 与正文，确认改动仍然适用后，"
+            "再用 kb_update(path=%r, content=..., base_hash=<最新 etag>) 重试；"
+            "不要不带 base_hash 重写，那会覆盖别人的修改。" % (path, path)
+        ),
+    })
+    return out
+
+
 @mcp.tool()
-def kb_update(path: str, content: str, archive_old: bool = True, quality_check: bool = False) -> str:
+def kb_update(path: str, content: str, archive_old: bool = True, quality_check: bool = False, base_hash: str = "") -> str:
     """更新**已存在**的知识库笔记（按路径精确改写同一篇，不会另存新文件）。
 
     何时用：当你要「更新知识库」而目标笔记已存在时，用本工具，**不要**用 kb_create。
@@ -924,6 +1011,10 @@ def kb_update(path: str, content: str, archive_old: bool = True, quality_check: 
     - archive_old：默认 True —— 改前内容归档到 50-档案/_旧版本/（不进检索索引），
       并在 frontmatter 记 version / supersedes，可回溯
     - quality_check：默认 False（更新不卡质量门禁；需强校验时传 True）
+    - base_hash：可选，写入基线版本号（就是 kb_read 返回的 `etag`）。传了服务端
+      会做乐观锁校验：若这期间别人已改过这篇，返回 409 版本冲突并给出当前版本，
+      **不落盘**；不传则保持旧行为（直接覆盖，兼容老调用方）。
+      多 AG / 多会话同时改同一篇时必须传。
     """
     if READONLY:
         return readonly_error("kb_update")
@@ -936,9 +1027,24 @@ def kb_update(path: str, content: str, archive_old: bool = True, quality_check: 
         "preserve_frontmatter": True,
         "quality_check": bool(quality_check),
     }
+    # 乐观锁：只有调用方显式给了版本号才带 base_hash 字段，
+    # 不带时请求体与旧版完全一致（向后兼容，行为一字不改）。
+    _bh = str(base_hash or "").strip()
+    if _bh:
+        data["base_hash"] = _bh
     # 2026-10-17：同上，更新也走查重，30 秒不够。
-    res = api("POST", f"/notes/{urllib.parse.quote(p)}", data, timeout=120)
+    if _bh:
+        with _serialize_note_write(p):
+            res = api("POST", f"/notes/{urllib.parse.quote(p)}", data, timeout=120)
+    else:
+        res = api("POST", f"/notes/{urllib.parse.quote(p)}", data, timeout=120)
     ok = "error" not in res
+    # 版本冲突：后端 409 时把「当前版本 / 你提交的版本 / 下一步怎么做」讲清楚，
+    # 不要只回一句 error 让调用方自己猜。
+    if res.get("error") == "version_conflict" or res.get("http_status") == 409:
+        res = _version_conflict(res, p)
+        log_usage("kb_update", ok=False, path=p, reason="version_conflict")
+        return brief(res, 12000)
     # 与 kb_create 同一套降级提示（2026-10-17），文案规则集中在 _dedup_notice()。
     _notice = _dedup_notice(res.get("dedup_degraded"))
     if _notice:
@@ -946,6 +1052,255 @@ def kb_update(path: str, content: str, archive_old: bool = True, quality_check: 
     log_usage("kb_update", ok=ok, path=p, reason=None if ok else res.get("error"))
     return brief(res, 12000)
 
+
+# ── 想法收集箱（T-104，2026-10-24）──
+# 一句话「记个想法 xxx」→ 追加进当天 30-记录/YYYY-MM-DD-待办.md 的「## 想法收集箱」小节。
+# 原文照收，不要求先拆成完整任务；不改前端、不建模板。
+_IDEA_HEADING = "## 想法收集箱"
+_IDEA_TZ = "Asia/Shanghai"
+
+
+def _idea_now() -> datetime:
+    """本机当前时间，固定按 Asia/Shanghai 取（服务器时区可能是 UTC）。"""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo(_IDEA_TZ))
+    except Exception:
+        log.warning("kb_idea 取 Asia/Shanghai 时区失败，退回本机时区", exc_info=True)
+        return datetime.now()
+
+
+def _idea_page_path(day: str) -> str:
+    return f"30-记录/{day}-待办.md"
+
+
+def _idea_insert(raw: str, entry: str) -> str:
+    """把一条 `- HH:MM 原文` 插进「## 想法收集箱」小节末尾；没有该小节就新建。
+
+    小节范围按「下一个一级/二级标题」界定，插在小节最后一个非空行之后，
+    并保证小节与后续标题之间留一个空行。原文其余部分逐字保留。
+    围栏代码块（``` / ~~~）里的 `##` 不算标题；整篇统一 CRLF 时按 CRLF 回写。
+    """
+    nl = "\n"
+    if raw.count("\n") and raw.count("\r\n") == raw.count("\n"):
+        nl = "\r\n"
+        raw = raw.replace("\r\n", "\n")
+    lines = raw.split("\n")
+
+    def _headings():
+        """返回所有「真标题」行号；跳过 frontmatter 与围栏代码块内部。
+
+        围栏按 CommonMark 口径闭合：同种字符且长度 ≥ 开启长度才算闭合，
+        否则 4 反引号块里嵌的 3 反引号会把它提前关掉，块内的 `##` 被当成标题。
+        """
+        out, fence = [], None
+        start = 0
+        # frontmatter：首行 --- 到下一个 --- 之间不是正文，里面的 `##` 一律不算标题。
+        if lines and lines[0].strip() == "---":
+            for i in range(1, len(lines)):
+                if lines[i].strip() in ("---", "..."):
+                    start = i + 1
+                    break
+        for i in range(start, len(lines)):
+            ln = lines[i]
+            s = ln.lstrip()
+            m = re.match(r"^(`{3,}|~{3,})", s)
+            if m:
+                run = m.group(1)
+                if fence is None:
+                    fence = run
+                elif run[0] == fence[0] and len(run) >= len(fence):
+                    fence = None
+                continue
+            if fence is None and re.match(r"^#{1,2}\s", ln):
+                out.append(i)
+        return out
+
+    heads = _headings()
+    idx = None
+    for i in heads:
+        if lines[i].strip() == _IDEA_HEADING:
+            idx = i
+            break
+    if idx is None:
+        # 没有小节：整篇末尾新建。文件末尾的空行先收掉，避免越积越多。
+        return (raw.rstrip("\n") + "\n\n" + _IDEA_HEADING + "\n\n" + entry + "\n").replace("\n", nl)
+    end = next((j for j in heads if j > idx), len(lines))
+    body = lines[idx + 1:end]
+    tail = lines[end:]
+    while body and not body[-1].strip():
+        body.pop()
+    # 小节紧跟标题时（空小节）先补一个空行，避免条目贴在小标题下面。
+    new_body = (body if body else [""]) + [entry]
+    if tail and tail[0].strip():
+        new_body.append("")
+    return "\n".join(lines[:idx + 1] + new_body + tail).replace("\n", nl)
+
+
+def _idea_line_no(raw: str, entry: str) -> int:
+    """返回该条在全文中的行号（1 起）；同样原文出现多次时取最后一次（刚追加的那条）。
+
+    统一按 LF 切行：CRLF 页面下 \r 会留在行尾，直接比对永远不相等。
+    """
+    lines = raw.replace("\r\n", "\n").split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].rstrip("\r") == entry:
+            return i + 1
+    return 0
+
+
+@mcp.tool()
+def kb_idea(text: str) -> str:
+    """记一个想法：一句话原文追加进当天待办页的「想法收集箱」。
+
+    何时用：用户说「记个想法 xxx」「帮我记一下 xxx」这类**还没想清楚**的碎片，
+    不要先追问、不要先改写成任务、不要另开新笔记，原文照收即可。
+
+    落点固定 `30-记录/YYYY-MM-DD-待办.md`（Asia/Shanghai 当天）：
+    - 页面不存在 → 自动新建（后端生成 frontmatter，正文为 `# YYYY-MM-DD 待办`）
+    - 已有 `## 想法收集箱` → 追加到该小节末尾；没有 → 新建该小节
+    - 每条格式固定 `- HH:MM 原文`
+
+    并发：整段「读原文 → 改 → 带 etag 写回」都在 `_serialize_note_write()`
+    里串行（进程内互斥 + 跨进程 flock），连说多条不会乱序或互相覆盖；
+    写入带 `base_hash=etag`，被外部改动时按版本冲突重读重试，不静默覆盖。
+    """
+    if READONLY:
+        return readonly_error("kb_idea")
+    body = re.sub(r"\s*\n\s*", " ", (text or "").strip()).strip()
+    if not body:
+        return brief({"error": "需要 text（想法原文，一句话即可）"})
+    now = _idea_now()
+    day = now.strftime("%Y-%m-%d")
+    entry = f"- {now.strftime('%H:%M')} {body}"
+    p = _idea_page_path(day)
+    quoted = urllib.parse.quote(p)
+
+    last = {}
+    last_get_err = ""
+    # 读-改-写整段串行：连说 3 条时第 2 条必须看到第 1 条已落盘的内容。
+    with _serialize_note_write(p):
+        for attempt in range(3):
+            res = api("GET", f"/notes/{quoted}")
+            is_404 = res.get("http_status") == 404 or res.get("error") == "不存在"
+            if res.get("error") and not is_404:
+                # 超时 / 500 / 非 JSON：绝不能当成「页面不存在」继续往下走。
+                # 之前这里会把 raw="" 送进 _idea_insert，再以空 base_hash 覆盖写，
+                # 后端「不带版本号即放行」—— 当天页正文会被整段替换成一条想法。
+                last_get_err = str(res.get("error"))
+                log.warning("kb_idea 读取当天页失败，重试: %s (%s)", p, last_get_err)
+                continue
+            created = False
+            if is_404:
+                # 建页只放「标题 + 空小节」，本条统一走下面带 base_hash 的追加。
+                # 好处：建页与追加不再各自写一次正文，回读失败重说也不会重复落库。
+                page = f"# {day} 待办\n\n{_IDEA_HEADING}\n\n"
+                res = api("POST", "/notes", {
+                    "title": f"{day}-待办",
+                    "content": page,
+                    "type": "record",
+                    "subdir": "",
+                    "tags": ["待办", day],
+                    "status": "active",
+                    "quality_check": False,
+                }, timeout=120)
+                if "error" in res:
+                    log_usage("kb_idea", ok=False, path=p, reason=res.get("error"))
+                    return brief(res, 4000)
+                if res.get("action") == "updated":
+                    # 404 到 POST 之间别人刚建好当天页，这次建页已把它整页覆盖。
+                    # 窗口极窄但不可逆，必须显式报错让人核对，不能只加一句 warning。
+                    log_usage("kb_idea", ok=False, path=p, reason="create_race")
+                    return brief({
+                        "error": "create_race",
+                        "path": p,
+                        "message": "建页瞬间该页已被别人创建，本次建页覆盖了对方的正文。",
+                        "hint": "请先 kb_read(path=%r) 核对当天页是否缺内容，必要时从备份恢复；本条未写入。" % p,
+                    }, 4000)
+                created = True
+                res = api("GET", f"/notes/{quoted}")
+                if res.get("error") or not (res.get("raw") or "").strip():
+                    log_usage("kb_idea", ok=False, path=p, reason="create_verify_failed")
+                    return brief({
+                        "error": "create_verify_failed",
+                        "path": p,
+                        "message": "当天待办页已建好，但回读失败，本条还没写进去。",
+                        "hint": "直接重说一次即可：重试会走追加分支，不会重复落库。",
+                        "detail": res,
+                    }, 4000)
+            raw = res.get("raw") or ""
+            etag = str(res.get("etag") or "").strip()
+            if not raw.strip() or not etag:
+                # 没有正文或没有版本号就不许写：空 base_hash 在后端等于「不校验」。
+                last_get_err = "empty_body_or_etag"
+                log.warning("kb_idea 读到空正文/空 etag，重试: %s", p)
+                continue
+            new_raw = _idea_insert(raw, entry)
+            wr = api("POST", f"/notes/{quoted}", {
+                "content": new_raw,
+                "archive_old": False,
+                "preserve_frontmatter": True,
+                "quality_check": False,
+                "base_hash": etag,
+            }, timeout=120)
+            if wr.get("http_status") == 409 or wr.get("error") == "version_conflict":
+                # 锁外有人改过这篇（人工编辑 / 另一把锁的进程）：重读后重试。
+                log.warning("kb_idea 版本冲突，重读重试: %s (attempt %d)", p, attempt + 1)
+                continue
+            if "error" in wr:
+                log_usage("kb_idea", ok=False, path=p, reason=wr.get("error"))
+                return brief(wr, 4000)
+            # 写回后读一次：确认本条真的落盘（顺带拿到新 etag 与真实行号）。
+            back = api("GET", f"/notes/{quoted}")
+            if back.get("error"):
+                # 写已经成功，只是回读失败 —— 报「失败」会让人重说一次、多出一条。
+                log_usage("kb_idea", ok=True, path=p, line=0, created=created,
+                          reason="verify_read_failed")
+                return brief({
+                    "ok": True,
+                    "path": p,
+                    "line": 0,
+                    "entry": entry,
+                    "created": created,
+                    "section": _IDEA_HEADING,
+                    "message": "已写入，但回读失败，行号未知。",
+                    "hint": "不要重说：本条已经落库，用 kb_read(path=%r) 核对即可。" % p,
+                    "verify_error": back.get("error"),
+                }, 4000)
+            line = _idea_line_no(back.get("raw") or "", entry)
+            if not line:
+                log_usage("kb_idea", ok=False, path=p, reason="verify_failed")
+                return brief({
+                    "error": "verify_failed",
+                    "path": p,
+                    "entry": entry,
+                    "message": "写入返回成功，但回读没找到这一条。",
+                    "hint": "先 kb_read 看当天页末尾再决定是否重说，别盲目重试（可能已落库）。",
+                }, 4000)
+            last = {"path": p, "line": line, "entry": entry, "created": created,
+                    "section": _IDEA_HEADING, "etag": back.get("etag") or ""}
+            break
+        else:
+            if last_get_err:
+                log_usage("kb_idea", ok=False, path=p, reason=last_get_err)
+                return brief({
+                    "error": "read_failed",
+                    "path": p,
+                    "message": "连续 3 次读不到当天待办页（或读到空正文/空版本号），本条未写入。",
+                    "reason": last_get_err,
+                    "hint": "先确认知识库服务可用（/health），再重说一次。",
+                }, 4000)
+            log_usage("kb_idea", ok=False, path=p, reason="version_conflict")
+            return brief({
+                "error": "version_conflict",
+                "path": p,
+                "message": "当天待办页连续 3 次被别人改动，本条未落盘。",
+                "hint": "稍后重说一次即可；若持续冲突，先 kb_read 看这篇是否有人在同时编辑。",
+            }, 4000)
+    log_usage("kb_idea", ok=True, path=p, line=last.get("line"), created=last.get("created"))
+    last["ok"] = True
+    return brief(last, 4000)
 
 
 @mcp.tool()
@@ -1218,6 +1573,25 @@ def kb_upload(
 
 
 if __name__ == "__main__":
+    # ── 命令行直呼（T-104，2026-10-24）──
+    # 用途：QQ 侧/脚本侧没有 MCP 调用通路时，也能一句话落库：
+    #   python3 scripts/kb_mcp_server.py --idea "明天想想追龙门槛"
+    # 走的是同一个 kb_idea()，所以串行化、乐观锁、落点规则与 MCP 调用完全一致。
+    if len(sys.argv) > 1 and sys.argv[1] in ("--idea", "-i"):
+        # 未加引号的多个词（--idea 明天 想想追龙门槛）要整句收下，不能只取第一段。
+        _txt = " ".join(sys.argv[2:]).strip()
+        if not _txt:
+            print("用法: python3 scripts/kb_mcp_server.py --idea \"想法原文\"", file=sys.stderr)
+            raise SystemExit(2)
+        _out = kb_idea(_txt)
+        print(_out)
+        # 失败要给脚本一个非零退出码，否则 QQ 侧「发出去了但没落库」会被当成功。
+        try:
+            _bad = bool(json.loads(_out).get("error"))
+        except Exception:
+            _bad = False
+        raise SystemExit(1 if _bad else 0)
+
     # 传输层选择（2026-10-17）：KB_MCP_TRANSPORT = sse | streamable-http | both | stdio
     #   默认 stdio —— 绝大多数客户端（Hermes / DSH / Claude Desktop）都是 stdio 拉起。
     #   默认 both 会让进程去监听 8897/8898 而不是走 stdio，客户端直接连不上。

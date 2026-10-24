@@ -13,7 +13,7 @@ from ..routes.routes_search import _int_arg
 from ..config import (
     NOTES_DIR, HAS_JIEBA, SCAN_DIRS, PROTECTED, is_excluded_path,
     DEFAULT_SETTINGS, load_settings, save_settings, get_setting, TYPE_PREFIX,
-    TYPE_MAP, DIR_TO_TYPE,
+    TYPE_MAP, DIR_TO_TYPE, KB_ROOT,
 )
 from ..store import is_master
 from ..audit import (
@@ -101,6 +101,121 @@ def update_settings_route():
         else:
             safe[k] = v
     return jsonify({"status": "ok", "settings": safe})
+
+
+# ── 梦境设置 API（2026-10-24）──
+#
+# 梦境有 19 个可调键，分两类：
+#   ① 8 个单值文件（.llm_base / .llm_model / .llm_max_tokens / .llm_max_tokens_hard /
+#      .min_dream_chars / .llm_system_prompt / .llm_key / .kb_token）
+#   ② 11 个 dream.py 源码常量（RECENT_DAYS / MAX_NOTES / …）
+# 它们都不在 DEFAULT_SETTINGS 里，走 /admin/settings 会被写入白名单静默丢弃，
+# 所以单独开一组接口，落盘到 KB_ROOT/dream_settings.json。
+#
+# 注意：这份文件目前只是「存下来」，dream.py 仍从原位置读值，尚未接线生效。
+DREAM_SETTINGS_FILE = KB_ROOT / "dream_settings.json"
+
+# 键 → (类型, 默认值, 是否敏感)。默认值取自 dream.py 的 _secret() 兜底与常量字面量。
+DREAM_KEYS = {
+    "llm_base":            ("text",     "http://127.0.0.1:8318/v1", False),
+    "llm_model":           ("text",     "deepseek-v4-flash",       False),
+    "llm_max_tokens":      ("number",   16000,                     False),
+    "llm_max_tokens_hard": ("number",   64000,                     False),
+    "min_dream_chars":     ("number",   300,                       False),
+    "llm_system_prompt":   ("textarea", "你是知识库助手，负责整理笔记之间的关联。", False),
+    "llm_key":             ("password", "",                        True),
+    "kb_token":            ("password", "",                        True),
+    "RECENT_DAYS":         ("number",   7,                         False),
+    "MAX_NOTES":           ("number",   36,                        False),
+    "MAX_RECENT":          ("number",   14,                        False),
+    "CHARS_PER_NOTE":      ("number",   700,                       False),
+    "MAX_TOTAL_CHARS":     ("number",   30000,                     False),
+    "MAX_ISLANDS":         ("number",   12,                        False),
+    "REF_MIN_KEY":         ("number",   8,                         False),
+    "REF_MIN_QUOTE":       ("number",   12,                        False),
+    "REF_WORKERS":         ("number",   4,                         False),
+    "REF_TIMEOUT":         ("number",   60,                        False),
+    "SEEN_KEEP_DAYS":      ("number",   60,                        False),
+}
+
+
+def _dream_load():
+    """读 dream_settings.json；缺失或损坏都回落空表（由调用方补默认值）。"""
+    if not DREAM_SETTINGS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(DREAM_SETTINGS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        log.warning("dream_settings.json 解析失败，按空配置处理", exc_info=True)
+        return {}
+
+
+def _dream_save(data):
+    """原子写入，避免写一半断电留下坏文件。"""
+    import tempfile, os as _os
+    fd, tmp = tempfile.mkstemp(dir=str(DREAM_SETTINGS_FILE.parent), prefix=".dream.", suffix=".tmp")
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2, ensure_ascii=False))
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(tmp, str(DREAM_SETTINGS_FILE))
+    finally:
+        if _os.path.exists(tmp):
+            try:
+                _os.unlink(tmp)
+            except OSError:
+                log.warning("清理梦境设置临时文件失败", exc_info=True)
+
+
+def _dream_public(raw):
+    """对外视图：敏感键只回布尔「已设置」，绝不回明文。"""
+    out = {}
+    for k, (typ, default, secret) in DREAM_KEYS.items():
+        v = raw.get(k, default)
+        if secret:
+            out[k] = {"value": "", "set": bool(v), "default": "", "type": typ, "secret": True}
+        else:
+            out[k] = {"value": v, "set": bool(v), "default": default, "type": typ, "secret": False}
+    return out
+
+
+@bp.route("/admin/dream/settings")
+@require_master
+def get_dream_settings():
+    return jsonify({"settings": _dream_public(_dream_load()), "file": DREAM_SETTINGS_FILE.name})
+
+
+@bp.route("/admin/dream/settings", methods=["POST"])
+@require_master
+def update_dream_settings():
+    d = json_body_dict()
+    raw = _dream_load()
+    changed = {}
+    for k, v in d.items():
+        if k not in DREAM_KEYS:
+            continue  # 未知键直接丢弃，不落盘（防止拼错静默生效）
+        typ, default, secret = DREAM_KEYS[k]
+        if secret:
+            # 空串 = 不动（前端不回显明文，留空表示「保持原值」）
+            if v in ("", None, "<REDACTED>"):
+                continue
+            raw[k] = str(v)
+            changed[k] = "<REDACTED>"
+            continue
+        if typ == "number":
+            try:
+                v = int(v)
+            except (ValueError, TypeError):
+                return jsonify({"error": f"{k} 必须是整数"}), 400
+        else:
+            v = str(v)
+        raw[k] = v
+        changed[k] = v
+    _dream_save(raw)
+    audit_log("dream_settings_updated", extra=json.dumps(changed, ensure_ascii=False))
+    return jsonify({"status": "ok", "settings": _dream_public(raw)})
 
 
 @bp.route("/admin/push/qq/test", methods=["POST"])

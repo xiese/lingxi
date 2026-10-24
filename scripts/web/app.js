@@ -1467,6 +1467,106 @@ var _SET_CACHE = null;      // 最近一次 /admin/settings 的响应
 var _SET_PAGE = '';         // '' = 一级页；否则是二级页的 key
 var _SET_Q = '';            // 一级页搜索词
 
+// ─── 梦境设置（2026-10-24）───
+// 19 个键不属 DEFAULT_SETTINGS，走 /admin/settings 会被写入白名单丢弃，
+// 因此单开一组、单走 /admin/dream/settings。落盘 $KB_ROOT/dream_settings.json。
+// 口径：数字用 number、长文本用 textarea、密钥用 password 且只显示「已设置」不回显明文；
+// 每个控件下方一行小字写默认值。
+var _DREAM_GROUPS = [
+  {t:'梦境 · 模型服务', d:'调用哪个模型、给多少配额', items:[
+    {k:'llm_base', l:'服务地址', t:'text', i:'link', c:'i-blue', g:'连接'},
+    {k:'llm_model', l:'模型名', t:'text', i:'chip', c:'i-purple', g:'连接'},
+    {k:'llm_key', l:'服务密钥', t:'password', i:'key', c:'i-orange', g:'连接'},
+    {k:'llm_max_tokens', l:'单次请求上限', t:'number', i:'slider', c:'i-teal', g:'配额'},
+    {k:'llm_max_tokens_hard', l:'重试翻倍的硬上限', t:'number', i:'timer', c:'i-teal', g:'配额'},
+    {k:'min_dream_chars', l:'正文最短长度', t:'number', i:'doc', c:'i-gray', g:'配额',
+      hint:'短于此长度视为无效生成，不写库'},
+    {k:'llm_system_prompt', l:'系统提示词', t:'textarea', i:'doc', c:'i-blue', g:'提示词'}
+  ]},
+  {t:'梦境 · 取材范围', d:'每次读多少笔记、截多长', items:[
+    {k:'RECENT_DAYS', l:'「最近」判定天数', t:'number', i:'clock', c:'i-teal', g:'取材'},
+    {k:'MAX_NOTES', l:'每次读入笔记数', t:'number', i:'doc', c:'i-gray', g:'取材'},
+    {k:'MAX_RECENT', l:'其中最近笔记上限', t:'number', i:'doc', c:'i-gray', g:'取材'},
+    {k:'CHARS_PER_NOTE', l:'每篇截断长度', t:'number', i:'doc', c:'i-gray', g:'截断'},
+    {k:'MAX_TOTAL_CHARS', l:'单次读入总字数', t:'number', i:'doc', c:'i-gray', g:'截断'},
+    {k:'MAX_ISLANDS', l:'孤岛候选上限', t:'number', i:'radar', c:'i-pink', g:'孤岛'}
+  ]},
+  {t:'梦境 · 正文反查', d:'判断两篇笔记是否真的互相引用', items:[
+    {k:'REF_MIN_KEY', l:'反查键最短长度', t:'number', i:'search', c:'i-blue', g:'反查',
+      hint:'太短会误匹配'},
+    {k:'REF_MIN_QUOTE', l:'短键必须带引号的长度', t:'number', i:'search', c:'i-blue', g:'反查'},
+    {k:'REF_WORKERS', l:'抓正文并发数', t:'number', i:'refresh', c:'i-teal', g:'并发',
+      hint:'再高会被服务端限流'},
+    {k:'REF_TIMEOUT', l:'抓正文超时（秒）', t:'number', i:'timer', c:'i-teal', g:'并发'}
+  ]},
+  {t:'梦境 · 状态与凭据', d:'去重窗口与知识库令牌', items:[
+    {k:'SEEN_KEEP_DAYS', l:'去重记录保留天数', t:'number', i:'clock', c:'i-gray', g:'状态'},
+    {k:'kb_token', l:'知识库令牌', t:'password', i:'lock', c:'i-orange', g:'凭据'}
+  ]}
+];
+// 拍平成一个查找表：二级页按 key 找项时不用再套两层循环
+function _dreamItems(){
+  var out=[];
+  _DREAM_GROUPS.forEach(function(g){g.items.forEach(function(f){out.push(f)})});
+  return out;
+}
+function _dreamFind(pageKey){
+  var k=String(pageKey||'').replace(/^dream\./,'');
+  var hit=null;
+  _dreamItems().forEach(function(f){if(f.k===k)hit=f});
+  return hit;
+}
+// 梦境项的一行摘要（一级列表右侧）
+function _dreamSummary(f){
+  var rec=(_SET_CACHE&&_SET_CACHE.__dream)||{};
+  var it=rec[f.k];
+  if(!it)return '未加载';
+  if(f.t==='password')return it.set?'已设置':'未设置';
+  if(f.t==='textarea'){var n=String(it.value||'').split('\n').filter(function(x){return x.trim()}).length;return n?n+' 行':'未设置'}
+  if(it.value===''||it.value===undefined||it.value===null)return '未设置';
+  return String(it.value);
+}
+// 二级页控件：数字 / 文本 / 长文本 / 密码各一种，密码不回显明文
+function _dreamField(f){
+  var rec=(_SET_CACHE&&_SET_CACHE.__dream)||{};
+  var it=rec[f.k]||{};
+  var cur=it.value;
+  if(cur===undefined||cur===null)cur='';
+  var inp;
+  if(f.t==='textarea'){
+    inp='<textarea id="d_'+esc(f.k)+'" rows="4" class="set-val set-textarea set-val-full" spellcheck="false">'+esc(cur)+'</textarea>';
+  }else if(f.t==='password'){
+    // 已设置就只给「已设置」占位，value 恒为空：留空提交 = 保持原值
+    inp='<input id="d_'+esc(f.k)+'" type="password" value="" placeholder="'+(it.set?'已设置，留空则不修改':'未设置')+'" class="set-val set-val-full set-secret" autocomplete="new-password">';
+  }else{
+    inp='<input id="d_'+esc(f.k)+'" type="'+(f.t==='number'?'number':'text')+'" value="'+esc(cur)+'"'
+      +(f.t==='number'?' step="1"':'')+' class="set-val set-val-full" autocomplete="off">';
+  }
+  var dv=it.default;
+  if(dv===undefined||dv===null)dv='';
+  var dtext=(f.t==='password')?'默认：未设置':('默认：'+(String(dv)===''?'（空）':String(dv)));
+  return '<div class="set-detail-box">'+inp
+    +'<div class="set-hint set-default">'+esc(dtext)+'</div></div>';
+}
+// 保存：只提交当前这一项。密码留空 = 不发这个键（后端按「不动」处理）
+function _dreamSave(){
+  var f=_dreamFind(_SET_PAGE);
+  if(!f)return;
+  var el=document.getElementById('d_'+f.k);
+  if(!el)return;
+  var v=el.value;
+  if(f.t==='password'&&v===''){toast.show('未修改','success');_setBack();return}
+  var body={};body[f.k]=v;
+  fetch(A+'/admin/dream/settings',{method:'POST',headers:{'Authorization':'Bearer '+T,'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){toast.show(d.error,'error');return}
+      if(_SET_CACHE&&_SET_CACHE.__dream)_SET_CACHE.__dream=d.settings;
+      toast.show('设置已保存','success');
+      _setBack();
+    }).catch(function(){toast.show('保存失败','error')});
+}
+
+
 // 每项的一行摘要值（一级列表右侧显示）
 function _setSummary(f,d){
   if(f.t==='devices')return '查看';
@@ -1548,6 +1648,35 @@ function _setList(){
     });
     h+='</div>';
   });
+  // 梦境组（2026-10-24）：独立接口 /admin/dream/settings，项来自 _DREAM_GROUPS。
+  // 搜索时同一套匹配规则，命中才渲染。
+  _DREAM_GROUPS.forEach(function(g){
+    var items=g.items.filter(function(f){
+      if(!q)return true;
+      return ('梦境 '+f.l+' '+f.k+' '+(f.hint||'')).toLowerCase().indexOf(q)>=0;
+    });
+    if(!items.length)return;
+    total+=items.length;
+    var subs=[],subIdx={};
+    items.forEach(function(f){
+      var name=f.g||g.t;
+      if(subIdx[name]===undefined){subIdx[name]=subs.length;subs.push({t:name,items:[]})}
+      subs[subIdx[name]].items.push(f);
+    });
+    h+='<div class="set-group"><div class="set-group-head">'+esc(g.t)+'</div>';
+    subs.forEach(function(sg){
+      if(subs.length>1)h+='<div class="set-subhead">'+esc(sg.t)+'</div>';
+      h+='<div class="set-card">';
+      sg.items.forEach(function(f){
+        // 页面键加 dream. 前缀：llm_base/llm_model/llm_key 三项与「大模型」组同名，
+        // 不加前缀点进梦境项会串到原组那一项上（实测过）。
+        h+='<div class="set-row set-row-link" onclick="_setOpen(\''+esc('dream.'+f.k)+'\')"><span class="set-icon '+(f.c||'')+'">'+_svgOf(f.i)+'</span><div class="set-label"><span>'+esc(f.l)+'</span></div>'
+          +'<span class="set-cur">'+esc(_dreamSummary(f))+'</span><span class="set-arrow">›</span></div>';
+      });
+      h+='</div>';
+    });
+    h+='</div>';
+  });
   // 账号组
   if(q&&'账号 退出登录 登录状态'.toLowerCase().indexOf(q)<0){}else{
     h+='<div class="set-group"><div class="set-group-head">账号</div><div class="set-card">'
@@ -1571,7 +1700,19 @@ function _setHome(){
 function _setDetail(){
   var d=_SET_CACHE||{}, f=null;
   _SET_GROUPS.forEach(function(g){g.items.forEach(function(x){if(x.k===_SET_PAGE)f=x})});
-  if(!f){_SET_PAGE='';return _setHome()}
+  // 梦境项走自己的控件与保存函数（接口不同，键也不在 d 里）。
+  // 页面键带 dream. 前缀，先于原组匹配，避免同名键串页。
+  if(!f || String(_SET_PAGE).indexOf('dream.')===0){
+    var df=_dreamFind(_SET_PAGE);
+    if(!df){_SET_PAGE='';return _setHome()}
+    var hd='<div class="set-back" onclick="_setBack()">‹ 设置</div>'
+      +'<div class="set-title">'+esc(df.l)+'</div>'
+      +(df.hint?'<div class="set-foot">'+esc(df.hint)+'</div>':'')
+      +'<div class="set-card">'+_dreamField(df)+'</div>'
+      +'<div class="set-save-bar"><button type="button" class="set-save" onclick="_dreamSave()">保存</button></div>';
+    document.getElementById('sf').innerHTML=hd;
+    return;
+  }
   if(f.t==='devices'){
     // iOS 范式：返回 › 大标题 › 说明小字 › 无边框白卡
     var h2='<div class="set-back" onclick="_setBack()">‹ 设置</div>'
@@ -1676,7 +1817,13 @@ function _setSave(){
 }
 
 function ls(){
-  ap('/admin/settings').then(function(d){
+  // 两套接口并行拉：/admin/settings（原有项）与 /admin/dream/settings（梦境 19 项）。
+  // 梦境接口失败不能把整个设置页拖成「加载失败」——单独降级成「未加载」。
+  var p1=ap('/admin/settings');
+  var p2=ap('/admin/dream/settings').catch(function(){return {settings:null}});
+  Promise.all([p1,p2]).then(function(r){
+    var d=r[0]||{};
+    d.__dream=(r[1]&&r[1].settings)||null;
     _SET_CACHE=d;
     if(_SET_PAGE)_setDetail();else _setHome();
   }).catch(function(){document.getElementById('sf').innerHTML='<p class="text-red-500">设置加载失败</p>'});

@@ -1,19 +1,23 @@
 /* name: 极光 | desc: 蓝紫渐变 · 明亮卡片 */
 /* ═════════ 主题 A · 极光 ═════════ */
 html.kb-shell[data-theme=aurora]{
-  --k-accent:linear-gradient(135deg,#5b6cf9,#8b5cf6);--k-hero:linear-gradient(135deg,#4f6af5 0%,#7c5cf6 55%,#b45cf0 100%);
+  --k-accent:linear-gradient(135deg,#4c56cf,#7b57d6);--k-hero:linear-gradient(135deg,#4653c9 0%,#6f4fd0 55%,#a44fe0 100%);
   --k-know:linear-gradient(135deg,#3b82f6,#06b6d4);--k-ai:linear-gradient(135deg,#8b5cf6,#ec4899);--k-sys:linear-gradient(135deg,#f59e0b,#f97316);
-  --k-fab-shadow:rgba(91,108,249,.45);--k-blue:#5b6cf9;--k-green:#16a34a;
-  --bg:#f3f5fb;--card-border:#e6e9f2;--blue:#5b6cf9;--blue-bg:#eef0ff;--blue-text:#4f5bd5;
+  --k-fab-shadow:rgba(76,86,207,.42);--k-blue:#4c56cf;--k-green:#16a34a;
+  --bg:#f5f6f8;--card-border:#e4e7ee;--blue:#4c56cf;--blue-bg:#eef1fb;--blue-text:#3f47b8;
+  /* T105 桌面端配色：冷灰底 + 纯白卡；强调色压深到 #4c56cf（白字对比 5.93:1，旧值 4.24:1） */
+  --text:#0f172a;--text2:#334155;--text3:#64748b;--text4:#94a3b8;
+  --sidebar-bg:#fbfcfe;--sidebar-border:#e4e7ee;
 }
 
-html.kb-shell.dark[data-theme=aurora]{--bg:#0f1220;--card-bg:#181c2e;--card-border:#272c45;--hover:#22263b;--blue:#8b9bff;--blue-bg:#262b52;--blue-text:#a5b1ff}
+html.kb-shell.dark[data-theme=aurora]{--bg:#0e1118;--card-bg:#171b26;--card-border:#262c3d;--hover:#222838;--blue:#93a4ff;--blue-bg:#232a4d;--blue-text:#b3c0ff;
+  --text:#f1f4f9;--text2:#d7dee9;--text3:#94a0b4;--text4:#6b7689;--sidebar-bg:#131720;--sidebar-border:#262c3d}
 
 .kb-shell[data-theme=aurora] body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","HarmonyOS Sans SC","MiSans","Microsoft YaHei",sans-serif}
 
-.kb-shell[data-theme=aurora] #app>header{background:rgba(255,255,255,.82)!important;backdrop-filter:saturate(1.6) blur(12px);-webkit-backdrop-filter:saturate(1.6) blur(12px);border-color:var(--card-border)!important}
+.kb-shell[data-theme=aurora] #app>header{background:rgba(251,252,254,.86)!important;backdrop-filter:saturate(1.6) blur(12px);-webkit-backdrop-filter:saturate(1.6) blur(12px);border-color:var(--card-border)!important}
 
-.kb-shell.dark[data-theme=aurora] #app>header{background:rgba(24,28,46,.85)!important}
+.kb-shell.dark[data-theme=aurora] #app>header{background:rgba(19,23,32,.88)!important}
 
 .kb-shell[data-theme=aurora] .card{border-radius:16px;box-shadow:0 2px 10px rgba(30,40,90,.05)}
 
@@ -23,7 +27,7 @@ html.kb-shell.dark[data-theme=aurora]{--bg:#0f1220;--card-bg:#181c2e;--card-bord
 
 .kb-shell[data-theme=aurora] .stat-bar{background:linear-gradient(180deg,#8b5cf6,#5b6cf9)}
 
-.kb-shell[data-theme=aurora] .bg-blue-600{background:linear-gradient(135deg,#5b6cf9,#8b5cf6)!important}
+.kb-shell[data-theme=aurora] .bg-blue-600{background:linear-gradient(135deg,#4c56cf,#7b57d6)!important}
 
 .kb-shell[data-theme=aurora] .hover\:bg-blue-700:hover{filter:brightness(.95)}
 
@@ -33,7 +37,7 @@ html.kb-shell.dark[data-theme=aurora]{--bg:#0f1220;--card-bg:#181c2e;--card-bord
 
 .kb-shell.dark[data-theme=aurora] .kb-nav{background:rgba(24,28,46,.92)}
 
-.kb-shell[data-theme=aurora] .kb-nav .mn-item.active{color:#5b6cf9;font-weight:600}
+.kb-shell[data-theme=aurora] .kb-nav .mn-item.active{color:#4c56cf;font-weight:600}
 
 .kb-shell[data-theme=aurora] .tag-item{background:var(--blue-bg);color:var(--blue-text)}
 
@@ -75,9 +79,9 @@ html.kb-shell.dark[data-theme=aurora]{--bg:#0f1220;--card-bg:#181c2e;--card-bord
 .kb-shell.dark[data-theme=aurora] input:focus,.kb-shell.dark[data-theme=aurora] textarea:focus,.kb-shell.dark[data-theme=aurora] select:focus{border-color:#1f6feb!important;box-shadow:0 0 0 3px rgba(31,111,235,.3)!important;outline:none}
 
 /* ═════════ v1.2 组件层：所有内页统一重做（两套主题共用结构，变量区分风格） ═════════ */
-html.kb-shell[data-theme=aurora]{--c-in:#f4f6fb;--c-in-b:#e3e7f1;--c-pri:linear-gradient(135deg,#5b6cf9,#8b5cf6);--c-pri-sh:0 4px 14px rgba(91,108,249,.32);--c-sec:#eef0ff;--c-sec-fg:#4f5bd5;--c-sec-b:transparent;--c-ring:rgba(124,92,246,.22);--c-r:12px;--c-acc:#7c5cf6;--c-h:#1e2240;--c-sub:#f7f8fd}
+html.kb-shell[data-theme=aurora]{--c-in:#f3f5fa;--c-in-b:#dfe4ef;--c-pri:linear-gradient(135deg,#4c56cf,#7b57d6);--c-pri-sh:0 4px 14px rgba(76,86,207,.28);--c-sec:#eef1fb;--c-sec-fg:#3f47b8;--c-sec-b:transparent;--c-ring:rgba(90,99,216,.22);--c-r:12px;--c-acc:#5a63d8;--c-h:#141a33;--c-sub:#f7f8fc}
 
-html.kb-shell.dark[data-theme=aurora]{--c-in:#12162a;--c-in-b:#2a3050;--c-sec:#262b52;--c-sec-fg:#b4bdff;--c-h:#e8eaff;--c-sub:#141831}
+html.kb-shell.dark[data-theme=aurora]{--c-in:#12161f;--c-in-b:#2b3247;--c-sec:#232a4d;--c-sec-fg:#c2ccff;--c-h:#eef1fb;--c-sub:#131722;--c-acc:#8f9bff}
 
 /* ═════════ 极光专属细节 ═════════ */
 .kb-shell[data-theme=aurora] main .card{box-shadow:0 1px 2px rgba(30,40,90,.04),0 6px 20px rgba(30,40,90,.05)}
@@ -106,13 +110,13 @@ html.kb-shell.dark[data-theme=aurora]{--c-in:#12162a;--c-in-b:#2a3050;--c-sec:#2
 
 .kb-shell[data-theme=aurora] #dc>.card:nth-child(6):before{background:linear-gradient(90deg,#f43f5e,#a855f7)}
 
-.kb-shell[data-theme=aurora] .note-content h2{color:#5b6cf9}
+.kb-shell[data-theme=aurora] .note-content h2{color:#4c56cf}
 
-.kb-shell.dark[data-theme=aurora] .note-content h2{color:#a5b1ff}
+.kb-shell.dark[data-theme=aurora] .note-content h2{color:#b3c0ff}
 
-.kb-shell[data-theme=aurora] .note-content pre{background:#1e2240;color:#e6e9ff}
+.kb-shell[data-theme=aurora] .note-content pre{background:#161a2c;color:#e6e9ff}
 
-.kb-shell[data-theme=aurora] .note-content :not(pre)>code{background:#eef0ff;color:#6d4aff}
+.kb-shell[data-theme=aurora] .note-content :not(pre)>code{background:#eef1fb;color:#4c3fc4}
 
 .kb-shell.dark[data-theme=aurora] .note-content :not(pre)>code{background:#262b52;color:#c4b5fd}
 
@@ -120,9 +124,9 @@ html.kb-shell.dark[data-theme=aurora]{--c-in:#12162a;--c-in-b:#2a3050;--c-sec:#2
 
 .kb-shell[data-theme=aurora] #adBody td:first-child span,.kb-shell[data-theme=aurora] #adBody td:first-child{font-weight:700}
 
-.kb-shell[data-theme=aurora] #login{background:radial-gradient(120% 60% at 0% 0%,#c7d2fe 0%,transparent 55%),radial-gradient(100% 60% at 100% 100%,#e9d5ff 0%,transparent 55%),#f3f5fb!important}
+.kb-shell[data-theme=aurora] #login{background:radial-gradient(120% 60% at 0% 0%,#c7d2fe 0%,transparent 55%),radial-gradient(100% 60% at 100% 100%,#e9d5ff 0%,transparent 55%),#f5f6f8!important}
 
-.kb-shell.dark[data-theme=aurora] #login{background:radial-gradient(120% 60% at 0% 0%,#26306b 0%,transparent 55%),radial-gradient(100% 60% at 100% 100%,#3b1f63 0%,transparent 55%),#0f1220!important}
+.kb-shell.dark[data-theme=aurora] #login{background:radial-gradient(120% 60% at 0% 0%,#26306b 0%,transparent 55%),radial-gradient(100% 60% at 100% 100%,#3b1f63 0%,transparent 55%),#0e1118!important}
 
 .kb-shell[data-theme=aurora] #login>div{background:rgba(255,255,255,.78)!important;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,.9)!important;box-shadow:0 20px 50px rgba(79,106,245,.18)!important}
 
