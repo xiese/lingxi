@@ -29,7 +29,7 @@ else:
 KB_ROOT = Path(os.environ.get("KB_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 _temp_file_lock = threading.Lock()
 NOTES_DIR = KB_ROOT / "笔记"
-VERSION = "1.0.11"
+VERSION = "1.0.12"
 # ── 环境变量新旧名兼容（2026-10-07 KB_HOST 拆名）──
 #
 # KB_HOST 历史上同名双义：本文件用它表示「监听绑定地址」，kb_mcp_server.py
@@ -174,7 +174,8 @@ def load_settings():
         for k, v in DEFAULT_SETTINGS.items():
             s.setdefault(k, v)
         # 未知键告警（拼错不报=配置静默失效的经典坑；只 warning 不删除，保持宽进）
-        unknown = set(s) - set(DEFAULT_SETTINGS)
+        # 要先减去「文件级键」：它们由代码直接读取、设计上不进设置页，不是拼错的键。
+        unknown = set(s) - set(DEFAULT_SETTINGS) - FILE_ONLY_SETTINGS
         if unknown:
             log.warning(f"settings 含未知键（拼错将静默无效，请核对）: {sorted(unknown)}")
         for k in ("index_auto_rebuild", "rerank_enabled"):
@@ -269,6 +270,23 @@ DEFAULT_SETTINGS = {
     # 只影响徽标上显示的名字，不影响可点性（可点只看本机 stat 结果）。
     # 留空则统一显示「其他服务器」。
     "other_server_prefixes": "",
+}
+
+# 「文件级键」白名单：由代码直接读取、但**设计上不进设置页**的调优项。
+#
+# 为什么单独列一张表、而不塞进 DEFAULT_SETTINGS：
+#   DEFAULT_SETTINGS 是「设置页契约」——每加一个键，前端 _SET_GROUPS 必须同步渲染，
+#   否则 tests/test_settings_groups.py 的「前端后端键集合一致」会红。
+#   下面这三个是 embed.py 的限速/代理调优项（见 docs/CONFIGURATION.md「可选调优项」），
+#   只在 .kb_settings.json 里手工填，设置页里没有对应输入框，
+#   所以它们既不该进 DEFAULT_SETTINGS、也不该被当成「拼错的键」告警。
+#
+# 判据：加进来之前先确认「有代码真的读它」。没人读的残留键（例如换服务商时留下的
+# 备份块）不属于这里，应当从 settings 文件里清掉，而不是登记成合法键。
+FILE_ONLY_SETTINGS = {
+    "embedding_proxy",
+    "embedding_request_gap",
+    "embedding_tokens_per_min",
 }
 
 def save_settings(s):

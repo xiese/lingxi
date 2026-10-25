@@ -1,3 +1,49 @@
+## 1.0.12
+
+2026-10-25 发布。清掉 settings 的「未知键」误报 —— 三个真在用的调优项被当成拼错的键，每次启动都告警。
+
+### 背景
+
+生产 1.92 每次启动都打一条：
+
+```
+settings 含未知键（拼错将静默无效，请核对）: ['_jina_backup', 'embedding_proxy', 'embedding_request_gap', 'embedding_tokens_per_min']
+```
+
+查下去是**两类完全不同的东西混在一条告警里**：
+
+| 键 | 代码引用 | 真实性质 |
+|---|---|---|
+| `_jina_backup` | 无 | 2026-09-13 从 jina 切 CF 嵌入时留下的备份块（里面还存着旧密钥） |
+| `embedding_proxy` | `embed.py` 读 | **真功能键**，`docs/CONFIGURATION.md` 有文档 |
+| `embedding_request_gap` | `embed.py` 读 | 同上 |
+| `embedding_tokens_per_min` | `embed.py` 读 | 同上 |
+
+后三个不是拼错，是「代码在用、但有登记遗漏」——它们是手工填在 `.kb_settings.json`、
+设置页没有输入框的**文件级键**，不在 `DEFAULT_SETTINGS` 里，于是被未知键判据扫中。
+真正的拼写错误混在这条噪音里，反而看不见。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_lib/config.py` | 新增 `FILE_ONLY_SETTINGS` 白名单（3 个键）；未知键判据改为 `set(s) - set(DEFAULT_SETTINGS) - FILE_ONLY_SETTINGS` |
+| `tests/test_settings_file_only_keys.py` | 新增 3 条回归：文件级键不再误报、**真拼错的键仍要告警**、两张表不许重叠 |
+
+### 为什么单列一张表、不塞进 DEFAULT_SETTINGS
+
+`DEFAULT_SETTINGS` 是「设置页契约」：每加一个键，前端 `_SET_GROUPS` 必须同步渲染，
+否则 `tests/test_settings_groups.py` 的「前后端键集合一致」会红。这三个是文件级的限速/代理
+调优项，设置页里不该出现输入框，所以走单独一张表，不进设置页契约。
+
+### 说明
+
+- **判据不是「告警消失了」，是「真拼错的键仍然告警」**。只断言前者，把整个告警关掉也能过 ——
+  这是这类修复最容易假绿的地方，所以单独钉了一条 `test_真拼错的键仍然告警`。
+- 红→绿→再红：`3 passed` → 摘掉白名单 `1 failed, 2 passed` → 还原 `3 passed`。
+- 顺手清了生产 settings 里的 `_jina_backup`（备份 `.kb_settings.json.bak-jinaclean-*`）：
+  没人读的残留键应当被清掉，而不是登记成合法键。
+
 ## 1.0.11
 
 2026-10-25 发布。修复增量嵌入的行号越界（生产表现为「服务活着但搜索全挂」）。
