@@ -30,6 +30,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .write_policy import ALLOWED_PROJECT_SUBDIRS
+
 log = logging.getLogger("kb.project_doc")
 
 __all__ = [
@@ -485,6 +487,15 @@ def on_project_note_written(notes_dir, note_path, note_rel: str, note_type: str)
         root = notes_dir / "10-项目"
         if project_dir.resolve() == root.resolve() or root.resolve() not in project_dir.resolve().parents:
             return None
+        # 2026-10-26 第二轮：`note_normalizer` 判定事件型后会自动把落点追加成
+        # `10-项目/<项目>/日志/` 或 `/排障/`。若直接拿 parent 当项目目录，就会在
+        # 日志子目录里生成一份 `日志项目.md`，凭空造出「假项目」——生产上曾有 5 处。
+        # 这里往上找一层：parent 若是分类子目录，真正的项目目录是它的上一级。
+        if project_dir.name in ALLOWED_PROJECT_SUBDIRS:
+            project_dir = project_dir.parent
+            if (project_dir.resolve() == root.resolve()
+                    or root.resolve() not in project_dir.resolve().parents):
+                return None
         if _is_main_doc(note_path):
             return None
 

@@ -412,6 +412,11 @@ _PROJECT_ROOT_DIR = "10-项目"
 _PROJECT_OVERVIEW_NAME = "项目总览.md"
 # 存量主档的后缀：`10-项目/<名>项目.md`
 DOC_SUFFIX_FOR_LEDGER = "项目.md"
+# 项目内唯一允许的分类子目录（规则 3 补丁，2026-10-26 第二轮）。
+# 前三个是规则表写明的「配置/更新/专题」；后两个是 note_normalizer 自动追加的
+# 事件型落点（log_subdir / troubleshoot_subdir 的默认值）。这五个名字必须与
+# note_normalizer 的默认配置保持一致，否则工具链自己的落点会被自己的守卫拦掉。
+ALLOWED_PROJECT_SUBDIRS = ("配置", "更新", "专题", "日志", "排障")
 # {readme 绝对路径: (mtime, 已登记项目名集合)}，进程内缓存，README 改动即失效
 _LEDGER_CACHE: dict = {}
 
@@ -501,6 +506,50 @@ def _guard_project_new_dir_unregistered(
         "hint": (
             "先在 10-项目/README.md 的项目表加一行（名称 + 一句话 + 状态），再写入；"
             "已有项目请直接 subdir=<已有项目名>，不要为新任务开新目录"
+        ),
+    }
+
+
+def _guard_project_subdir_unregistered(
+    note_type: str, sd_norm: str, notes_dir
+) -> Optional[dict]:
+    """项目**内部**新开子目录也必须受控（规则 3 补丁）—— 2026-10-26 第二轮新增。
+
+    为什么规则 3 不够：规则 3 只拦「10-项目 下新项目目录」，而生产上真正的
+    复发口是项目内部 —— `note_normalizer` 判定事件型后自动追加 `/日志`、`/排障`，
+    再叠加 `project_doc` 把 `note_path.parent` 当项目目录，就在
+    `10-项目/<项目>/日志/` 里生成了 `日志项目.md`，凭空造出一个「假项目」。
+    2026-10-26 审查时生产上这种残留有 5 处。
+
+    三条边界（与规则 3 同一套口径）：
+      1. 只认白名单 `ALLOWED_PROJECT_SUBDIRS`（配置/更新/专题/日志/排障）；
+      2. 目录**已经存在**就放行 —— 存量欠账不能把正常写入锁死；
+      3. 台账读不到（None）也放行 —— 守卫失效必须退化成不拦。
+    """
+    segs = _project_subdir_segments(note_type, sd_norm)
+    if not segs or len(segs) < 2:
+        return None            # 只有项目名、没有子目录，不归本守卫管
+    if notes_dir is None:
+        return None
+    sub = segs[1]
+    if sub in ALLOWED_PROJECT_SUBDIRS:
+        return None
+    root = Path(notes_dir) / _PROJECT_ROOT_DIR
+    try:
+        if (root / segs[0] / sub).is_dir():
+            return None        # 存量子目录，放行
+    except OSError:
+        return None
+    names = _registered_project_names(notes_dir)
+    if names is None:
+        return None
+    return {
+        "error": "project_subdir_unregistered",
+        "detail": f"项目内新开子目录不在白名单：{segs[0]}/{sub}",
+        "hint": (
+            "项目内只允许 " + "/".join(ALLOWED_PROJECT_SUBDIRS) +
+            " 这五个分类子目录。这篇文档请直接放进项目目录（subdir=<项目名>），"
+            "不要为一次任务在项目内部再开目录。"
         ),
     }
 
@@ -619,6 +668,10 @@ def validate_write_hygiene(
         return err, warnings
 
     err = _guard_project_new_dir_unregistered(note_type, sd_norm, notes_dir)
+    if err is not None:
+        return err, warnings
+
+    err = _guard_project_subdir_unregistered(note_type, sd_norm, notes_dir)
     if err is not None:
         return err, warnings
 
