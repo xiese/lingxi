@@ -270,6 +270,84 @@ def _guard_archive_root(note_type: str, sd_norm: str) -> Optional[dict]:
     return None
 
 
+def _project_subdir_segments(note_type: str, sd_norm: str) -> Optional[List[str]]:
+    """把 project 的 subdir 归一成「项目名 / 可选子目录」两段语义。
+
+    create_note 允许 subdir 带顶层目录前缀（如 "10-项目/某某项目"），
+    这段前缀不是层级，计数前必须剥掉；非 project 类型直接返回 None（不适用）。
+    """
+    if note_type != "project" or not sd_norm:
+        return None
+    segs = [p for p in sd_norm.split("/") if p]
+    if segs and re.match(r"^\d{2}-", segs[0]):
+        segs = segs[1:]
+    return segs
+
+
+def _guard_project_dir_action_word(note_type: str, sd_norm: str) -> Optional[dict]:
+    """项目目录名以「动作词」结尾硬拦 —— 2026-10-26 新增。
+
+    背景：实测 10-项目/ 下 69 个目录里，21 个是「一篇笔记一个目录」，
+    目录名就是那次任务的标题（<项目>-整合服务 / <项目>-算法池总览UI /
+    <长任务名>与动态结算 …）。根因是调用方把任务标题当 subdir 传进来，
+    而 plan_server_write 一旦拿到 subdir 且落点父目录存在就会接管并建目录。
+
+    项目目录应当是**名词**（一个真实存在的东西），不是**动作**（一次任务）。
+    「整合服务」不是一个东西，是某个项目的一次动作 → 应归该项目目录。
+
+    判定用两种模式，覆盖实测全部 21 个坏目录：
+      A. 分隔符 + 动作词结尾：<项目>-整合服务 / dsh-会话与插件治理
+      B. 无分隔符但整名以动作词结尾：<长任务名>以动作词收尾
+    """
+    segs = _project_subdir_segments(note_type, sd_norm)
+    if not segs:
+        return None
+    first = segs[0]
+    ACTION_TAIL = (
+        r"整合服务|总览UI|开发记录|回测|采集|接入|移植|修复|审查|审计|"
+        r"整改|排障|定稿|上线|落地|实现|验证|复盘|调研|方案|设计|"
+        r"结论|锁定|账本|成绩单|服务器运维|治理|升级|改造|重构|清理|收敛|"
+        r"统计走势图|新架构|数据源|结算|部署|迁移|运维|维护|排查|诊断|"
+        r"测试库|测试机"
+    )
+    pat_a = re.compile(r"[-—_·](" + ACTION_TAIL + r")\s*$", re.I)
+    pat_b = re.compile(r"(" + ACTION_TAIL + r")\s*$", re.I)
+    hit = pat_a.search(first) or (pat_b.search(first) if len(first) >= 5 else None)
+    if hit:
+        return {
+            "error": "project_dir_action_word_forbidden",
+            "detail": f"项目目录名不能以动作词结尾：{first}",
+            "hint": (
+                "项目目录应是名词（一个真实存在的东西），不是一次任务。"
+                "把这篇文档放进所属项目目录，例如 subdir=\"算法库\" 而不是 "
+                "subdir=\"算法库-整合服务\"。新建项目请先在 "
+                "10-项目/README.md 项目表登记。"
+            ),
+        }
+    return None
+
+
+def _guard_project_dir_depth(note_type: str, sd_norm: str) -> Optional[dict]:
+    """project 的 subdir 有效层级 > 2 段硬拦 —— 2026-10-26 新增。
+
+    合法形态只有三种：""、"<项目名>"、"<项目名>/<配置|更新|专题>"。
+    出现 3 段说明调用方在造嵌套层级，长期会把库结构搞成迷宫。
+
+    只约束 project：archive 的 50-档案 下镜像原结构（20-知识/工具研究）是设计如此，
+    knowledge 的分类层级同理，都不该被这条拦掉。
+    """
+    segs = _project_subdir_segments(note_type, sd_norm)
+    if segs is None:
+        return None
+    if len(segs) > 2:
+        return {
+            "error": "project_dir_depth_forbidden",
+            "detail": f"项目 subdir 层级过深（{len(segs)} 段）：{sd_norm}",
+            "hint": "只允许 <项目名> 或 <项目名>/<配置|更新|专题>，最多两段",
+        }
+    return None
+
+
 def _guard_skill_dump(
     note_type: str, title_s: str, content_s: str
 ) -> Optional[dict]:
@@ -343,6 +421,8 @@ def validate_write_hygiene(
     规则与历史 routes_notes._hygiene_path_guards / MCP validate_write_hygiene 对齐：
     - 废弃路径 10-项目_知识库项目
     - 项目 subdir 末段部署/deploy 分叉
+    - 项目目录名以动作词结尾（2026-10-26 新增，止「一篇一目录」）
+    - 项目 subdir 深度 > 2 段（2026-10-26 新增）
     - archive 禁止落到 50-档案根
     - knowledge 下 skill 整包 dump（≥20k 且无指针关键词）
     - 同名 basename 已存在 → warning（不硬拦）
@@ -370,6 +450,14 @@ def validate_write_hygiene(
         return err, warnings
 
     err = _guard_project_dir_fork(note_type, sd_norm)
+    if err is not None:
+        return err, warnings
+
+    err = _guard_project_dir_action_word(note_type, sd_norm)
+    if err is not None:
+        return err, warnings
+
+    err = _guard_project_dir_depth(note_type, sd_norm)
     if err is not None:
         return err, warnings
 
