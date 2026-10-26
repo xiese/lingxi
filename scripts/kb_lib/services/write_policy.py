@@ -407,6 +407,161 @@ def _same_basename_warnings(
     return warnings
 
 
+_PROJECT_LEDGER_FILE = "README.md"
+_PROJECT_ROOT_DIR = "10-项目"
+_PROJECT_OVERVIEW_NAME = "项目总览.md"
+# 存量主档的后缀：`10-项目/<名>项目.md`
+DOC_SUFFIX_FOR_LEDGER = "项目.md"
+# {readme 绝对路径: (mtime, 已登记项目名集合)}，进程内缓存，README 改动即失效
+_LEDGER_CACHE: dict = {}
+
+
+def _registered_project_names(notes_dir) -> Optional[set]:
+    """读 `10-项目/README.md` 项目表 + `10-项目/*项目.md`，返回已登记项目名集合。
+
+    三种来源合并（任一命中即算登记，宁可放宽不可误拦）：
+      ① 表格首列（`| 项目 | 主档 | 子目录 |` 的「项目」列）
+      ② markdown 链接文字与 `./xxx` 目标名
+      ③ `10-项目/<名>项目.md` 这类平铺主档（存量项目的主档在根层，不在目录内）
+
+    返回 None 表示**台账不可用**（README 缺失/读不了/解析异常）。调用方必须
+    把 None 当成「放行」—— 守卫失效要退化成不拦，不能把全库写入锁死。
+    """
+    if notes_dir is None:
+        return None
+    root = Path(notes_dir) / _PROJECT_ROOT_DIR
+    readme = root / _PROJECT_LEDGER_FILE
+    try:
+        if not readme.is_file():
+            return None
+        key = str(readme)
+        mtime = readme.stat().st_mtime
+        cached = _LEDGER_CACHE.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        text = readme.read_text(encoding="utf-8")
+        names: set = set()
+        for line in text.splitlines():
+            s = line.strip()
+            if not s.startswith("|"):
+                continue
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not cells:
+                continue
+            cell = cells[0]
+            # 跳过表头分隔行（|---|）与空单元格
+            if not cell or set(cell) <= set("-: "):
+                continue
+            names.add(cell)
+        for m in re.finditer(r"\[([^\]]+)\]\(\./([^)/]+)", text):
+            names.add(m.group(1).strip())
+            names.add(m.group(2).strip())
+        try:
+            for f in root.glob(f"*{DOC_SUFFIX_FOR_LEDGER}"):
+                names.add(f.name[: -len(DOC_SUFFIX_FOR_LEDGER)].strip())
+        except OSError:
+            pass
+        _LEDGER_CACHE[key] = (mtime, names)
+        return names
+    except Exception:
+        log.warning("write_policy.py 读项目台账失败，本次跳过规则 3", exc_info=True)
+        return None
+
+
+def _guard_project_new_dir_unregistered(
+    note_type: str, sd_norm: str, notes_dir
+) -> Optional[dict]:
+    """新建项目目录必须在 `10-项目/README.md` 项目表登记（规则 3）—— 2026-10-26 新增。
+
+    **只拦「目录尚不存在」的情形**：存量目录一律放行，所以对现有 70 个项目零影响，
+    也允许把新文档写进任何已有项目目录。台账不可读时同样放行（见
+    `_registered_project_names` 的 None 语义）。
+
+    为什么只拦新建：老目录没登记是历史欠账，靠一次性清洗补；新建目录没登记才是
+    「一篇一目录」复发的入口，必须在写入端堵死。
+    """
+    segs = _project_subdir_segments(note_type, sd_norm)
+    if not segs:
+        return None
+    if notes_dir is None:
+        return None
+    name = segs[0]
+    root = Path(notes_dir) / _PROJECT_ROOT_DIR
+    try:
+        if (root / name).is_dir():
+            return None  # 存量项目目录，放行
+    except OSError:
+        return None
+    names = _registered_project_names(notes_dir)
+    if names is None or name in names:
+        return None
+    return {
+        "error": "project_dir_unregistered",
+        "detail": f"新建项目目录未在 10-项目/README.md 项目表登记：{name}",
+        "hint": (
+            "先在 10-项目/README.md 的项目表加一行（名称 + 一句话 + 状态），再写入；"
+            "已有项目请直接 subdir=<已有项目名>，不要为新任务开新目录"
+        ),
+    }
+
+
+def _project_overview_warnings(
+    note_type: str,
+    sd_norm: str,
+    title_s: str,
+    notes_dir,
+) -> List[dict]:
+    """同一项目出现「总览 + 主档」双入口 → warning（规则 4，不硬拦）。
+
+    规则 4 的口径是「一个项目有且只有一个总览入口」。存量里已经有
+    两个项目同时存在 `<项目名>项目.md` 和 `项目总览.md`（历史产物），
+    硬拦会让正常写入失败，所以这里只提示，让调用方自己决定合并哪一份。
+    """
+    warnings: List[dict] = []
+    try:
+        if notes_dir is None:
+            return warnings
+        segs = _project_subdir_segments(note_type, sd_norm)
+        if not segs:
+            return warnings
+        name = segs[0]
+        d = Path(notes_dir) / _PROJECT_ROOT_DIR / name
+        if not d.is_dir():
+            return warnings
+        overview = d / _PROJECT_OVERVIEW_NAME
+        mains = [d / f"{name}{DOC_SUFFIX_FOR_LEDGER}", d / f"{name}.md"]
+        main = next((m for m in mains if m.is_file()), None)
+        stem = (title_s or "").strip()
+        main_stems = {name, f"{name}项目"}
+        if stem == _PROJECT_OVERVIEW_NAME[: -len(".md")] and main is not None:
+            warnings.append(
+                {
+                    "kind": "project_dual_entry",
+                    "paths": [str(main.relative_to(notes_dir))],
+                    "hint": (
+                        "本项目已有主档，再写「项目总览」会形成双入口；"
+                        "规则 4 要求一个项目只有一个总览入口，请并入主档或删掉旧的那份"
+                    ),
+                }
+            )
+        elif stem in main_stems and overview.is_file():
+            # 写主档时主档文件可能还不存在（本次才创建），所以这里只看总览在不在，
+            # 不能要求 main 已存在 —— 否则「先有总览、后写主档」这条永远不告警。
+            warnings.append(
+                {
+                    "kind": "project_dual_entry",
+                    "paths": [str(overview.relative_to(notes_dir))],
+                    "hint": (
+                        "本项目已有「项目总览」，再写主档会形成双入口；"
+                        "规则 4 要求一个项目只有一个总览入口"
+                    ),
+                }
+            )
+    except Exception:
+        log.warning("write_policy.py 双入口检查异常，已忽略", exc_info=True)
+    return warnings
+
+
 def validate_write_hygiene(
     note_type: str,
     subdir: str,
@@ -423,9 +578,11 @@ def validate_write_hygiene(
     - 项目 subdir 末段部署/deploy 分叉
     - 项目目录名以动作词结尾（2026-10-26 新增，止「一篇一目录」）
     - 项目 subdir 深度 > 2 段（2026-10-26 新增）
+    - 新建项目目录未在 10-项目/README.md 项目表登记（2026-10-26 新增，规则 3）
     - archive 禁止落到 50-档案根
     - knowledge 下 skill 整包 dump（≥20k 且无指针关键词）
     - 同名 basename 已存在 → warning（不硬拦）
+    - 同一项目「总览 + 主档」双入口 → warning（规则 4，不硬拦）
 
     本函数只做薄编排：校验规则拆到各 _guard_* / _same_basename_warnings，
     下面的调用顺序即校验优先级，与拆分前逐行一致；任何改动顺序前先看各函数 docstring。
@@ -461,6 +618,10 @@ def validate_write_hygiene(
     if err is not None:
         return err, warnings
 
+    err = _guard_project_new_dir_unregistered(note_type, sd_norm, notes_dir)
+    if err is not None:
+        return err, warnings
+
     err = _guard_archive_root(note_type, sd_norm)
     if err is not None:
         return err, warnings
@@ -471,6 +632,9 @@ def validate_write_hygiene(
 
     warnings.extend(
         _same_basename_warnings(note_type, title_s, notes_dir, sanitize_fn)
+    )
+    warnings.extend(
+        _project_overview_warnings(note_type, sd_norm, title_s, notes_dir)
     )
     return None, warnings
 

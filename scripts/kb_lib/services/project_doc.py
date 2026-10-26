@@ -69,6 +69,10 @@ schema_version: 1
 下一步要做什么、有哪些待办。
 """
 DOC_SUFFIX = "项目.md"
+# 规则 4（2026-10-26）：存量项目的「总览入口」用的另一个文件名。
+# 只用于**识别既有入口**，不用于生成 —— 生成仍走 doc_name()，避免一次改动
+# 就把所有新项目的主文档改名。
+OVERVIEW_NAME = "项目总览.md"
 REFRESH_INTERVAL = 60.0          # 同项目聚合刷新窗口（秒）
 MAX_RECENT = 10                  # 「最近笔记」最多保留条数
 
@@ -115,6 +119,11 @@ def _all_main_doc_names(dir_name: str) -> list:
         return [DOC_SUFFIX]
     primary = doc_name(name)
     names = [primary]
+    # 规则 4（2026-10-26）：`项目总览.md` 也是「一个项目一个入口」的合法载体。
+    # 存量项目里有三个用这个文件名当入口，早期这里不认，
+    # 于是再写一篇就多生成一份 `<名>项目.md`，一个项目两个入口。
+    if OVERVIEW_NAME not in names:
+        names.append(OVERVIEW_NAME)
     for cand in (f"{name}项目.md", f"{name}.md"):
         if cand not in names:
             names.append(cand)
@@ -174,6 +183,35 @@ def _find_main_doc(project_dir: Path) -> Optional[Path]:
                 return f
     except OSError:
         log.warning("project_doc: 扫描项目目录失败 %s", project_dir, exc_info=True)
+    return None
+
+
+def _find_legacy_entry(project_dir: Path) -> Optional[Path]:
+    """项目目录里已存在的**手工**入口文件（非本模块生成）—— 规则 4。
+
+    存量项目的入口是手写的 `项目总览.md`，四段口径是
+    「干什么 / 怎么用 / 关键事实 / 文档索引」，与本模块的五段式
+    不同。它不带生成指纹，`_find_main_doc` 认不出来，于是再写一篇就会多生成
+    一份 `<名>项目.md` —— 一个项目两个入口。
+
+    这里把「已有人工入口」单独找出来：命中就**既不生成也不刷新**，
+    人工入口的内容一个字都不碰（与 T12「存量不回补」口径一致）。
+    """
+    try:
+        if not project_dir.is_dir():
+            return None
+        name = str(project_dir.name or "").strip()
+        # 只认两个「入口专用名」，**不认** `<目录名>.md` ——
+        # 那是最常见的普通笔记名，把它当成入口会让正常的生成/刷新被误跳过。
+        cands = [OVERVIEW_NAME]
+        if name:
+            cands.append(f"{name}项目.md")
+        for cname in cands:
+            f = project_dir / cname
+            if f.is_file() and not _looks_generated(f):
+                return f
+    except OSError:
+        log.warning("project_doc: 扫描人工入口失败 %s", project_dir, exc_info=True)
     return None
 
 
@@ -456,6 +494,10 @@ def on_project_note_written(notes_dir, note_path, note_rel: str, note_type: str)
         # 旧实现直接 return None，导致平铺在 `10-项目/` 根的存量主文档永远不更新，
         # 「最近笔记」段永远是空的 —— 这也是存量不回补与自动更新必须共存的地方。
         if existing is None and _parent_has_main_doc(project_dir):
+            return None
+        # 规则 4：项目里已有人工入口（`项目总览.md` / 手写 `<名>项目.md`）
+        # → 既不生成也不刷新。一个项目只许一个入口，且人工入口优先。
+        if existing is None and _find_legacy_entry(project_dir) is not None:
             return None
         if existing is not None:
             key = str(project_dir.resolve())
