@@ -1,6 +1,9 @@
 """写路径单一真相：卫生 + 质量 + 写后索引出口。
 
 REST / MCP 共用本模块；MCP 不再本地重复门禁。
+
+规则来源：``rules.yaml``（单一真相源，2026-10-27 收敛）。启动时加载，
+读不到或字段缺失时回落下方内置默认值——行为不退化，只是规则可配置化。
 """
 from __future__ import annotations
 
@@ -10,26 +13,39 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+# 规则常量：优先读 rules.yaml（与 write_policy.py 同目录），缺失时回落内置默认
+_RULES_YAML = Path(__file__).resolve().parent.parent / "rules.yaml"
+
+
+def _load_rules() -> dict:
+    """加载 rules.yaml。坏文件当空 dict（回落默认），不抛错。"""
+    try:
+        import json
+        if not _RULES_YAML.exists():
+            return {}
+        import yaml  # 本机有 PyYAML（kb 依赖），没有就尝试 json 兜底
+        data = yaml.safe_load(_RULES_YAML.read_text(encoding="utf-8")) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+_RULES = _load_rules()
+
 # 与历史 MCP 默认对齐，可用环境变量覆盖
-MIN_CONTENT_LEN = int(os.environ.get("KB_MCP_MIN_CONTENT_LEN", "800"))
+MIN_CONTENT_LEN = int(os.environ.get(
+    "KB_MCP_MIN_CONTENT_LEN",
+    str((_RULES.get("quality") or {}).get("min_content_len", "800"))))
 REQUIRED_SECTIONS = [
-    "## 背景",
-    "## 关键发现",
-    "## 实施步骤",
-    "## 验证结果",
-    "## 后续建议",
+    s for s in ((_RULES.get("quality") or {}).get("required_sections")
+                or ["## 背景", "## 关键发现", "## 实施步骤", "## 验证结果", "## 后续建议"])
+    if isinstance(s, str) and s
 ]
 
 # 写后需要 force 刷搜索的动作（删除/归档会改变可检索集合）
 FORCE_REFRESH_ACTIONS = frozenset(
-    {
-        "deleted",
-        "delete",
-        "archived",
-        "archive",
-        "batch_deleted",
-        "batch_archived",
-    }
+    (_RULES.get("force_refresh_actions")
+     or ["deleted", "delete", "archived", "archive", "batch_deleted", "batch_archived"])
 )
 
 __all__ = [
@@ -407,16 +423,18 @@ def _same_basename_warnings(
     return warnings
 
 
-_PROJECT_LEDGER_FILE = "README.md"
-_PROJECT_ROOT_DIR = "10-项目"
-_PROJECT_OVERVIEW_NAME = "项目总览.md"
+_PROJECT_LEDGER_FILE = str((_RULES.get("project") or {}).get("ledger_file") or "README.md")
+_PROJECT_ROOT_DIR = str((_RULES.get("project") or {}).get("root_dir") or "10-项目")
+_PROJECT_OVERVIEW_NAME = str((_RULES.get("project") or {}).get("overview_name") or "项目总览.md")
 # 存量主档的后缀：`10-项目/<名>项目.md`
-DOC_SUFFIX_FOR_LEDGER = "项目.md"
+DOC_SUFFIX_FOR_LEDGER = str((_RULES.get("project") or {}).get("doc_suffix_for_ledger") or "项目.md")
 # 项目内唯一允许的分类子目录（规则 3 补丁，2026-10-26 第二轮）。
 # 前三个是规则表写明的「配置/更新/专题」；后两个是 note_normalizer 自动追加的
 # 事件型落点（log_subdir / troubleshoot_subdir 的默认值）。这五个名字必须与
 # note_normalizer 的默认配置保持一致，否则工具链自己的落点会被自己的守卫拦掉。
-ALLOWED_PROJECT_SUBDIRS = ("配置", "更新", "专题", "日志", "排障")
+ALLOWED_PROJECT_SUBDIRS = tuple(
+    (_RULES.get("project") or {}).get("allowed_subdirs")
+    or ("配置", "更新", "专题", "日志", "排障"))
 # {readme 绝对路径: (mtime, 已登记项目名集合)}，进程内缓存，README 改动即失效
 _LEDGER_CACHE: dict = {}
 

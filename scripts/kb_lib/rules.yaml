@@ -1,0 +1,38 @@
+# 知识库写入规则（单一真相源 · 2026-10-27 收敛）
+#
+# 本文件是 write_policy.py 的规则常量来源。改动规则先改这里，
+# 再更新对应的 _guard_* 函数实现（规则「做什么」与「怎么做」分离）。
+# write_policy.py 启动时加载本文件；读不到时回落内置默认值（行为不退化）。
+
+# ---- 内容质量 ----
+quality:
+  min_content_len: 800            # 笔记最小正文长度（KB_MCP_MIN_CONTENT_LEN 可覆盖）
+  required_sections:              # 模板笔记必带章节
+    - "## 背景"
+    - "## 关键发现"
+    - "## 实施步骤"
+    - "## 验证结果"
+    - "## 后续建议"
+
+# ---- 写后动作 ----
+force_refresh_actions:
+  - deleted
+  - delete
+  - archived
+  - archive
+  - batch_deleted
+  - batch_archived
+
+# ---- 项目目录规则（规则 3 补丁，2026-10-26）----
+project:
+  ledger_file: "README.md"        # 项目登记台账
+  root_dir: "10-项目"             # 项目根目录
+  overview_name: "项目总览.md"     # 总览文件名
+  doc_suffix_for_ledger: "项目.md"
+  allowed_subdirs:                # 项目内唯一允许的分类子目录（白名单）
+    - "配置"
+    - "更新"
+    - "专题"
+    - "日志"
+    - "排障"
+  forbidden_path_substrings: []   # 预留：路径黑名单（当前由 _FORBIDDEN_PATH_SUBSTRINGS 实现）
