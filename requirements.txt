@@ -21,5 +21,8 @@ numpy==2.2.6
 rank-bm25==0.2.2
 jieba==0.42.1
 
+# 配置解析（write_policy 读取 rules.yaml；缺失时回落内置默认值）
+PyYAML==6.0.2
+
 # MCP 服务
 fastmcp==3.2.3
