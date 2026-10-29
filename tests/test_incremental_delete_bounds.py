@@ -1,6 +1,6 @@
 """增量删除分支的行号错位回归（2026-10-25）。
 
-现象（生产 1.92:8899，2026-10-25 03:21:08）：
+现象（生产实例 192.0.2.10:8899，2026-10-25 03:21:08）：
     File "search.py", line 1311, in build_embeddings_incremental
         self.embeddings = self.embeddings[keep_indices]
     IndexError: index 1867 is out of bounds for axis 0 with size 1867

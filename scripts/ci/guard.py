@@ -4,7 +4,9 @@
 用法:
   python3 scripts/ci/guard.py history [REF]   # 历史闸：只允许一个根提交，且必须是本仓快照根
   python3 scripts/ci/guard.py paths           # 路径闸：受跟踪文件必须在白名单内
-  python3 scripts/ci/guard.py content         # 内容闸：不许出现真实 IP；文档里不许出现 /root/ 路径
+  python3 scripts/ci/guard.py content         # 内容闸：不许出现真实 IP 或内网机器简称；文档不许出现 /root/ 路径
+  python3 scripts/ci/guard.py release [REF]   # 发布闸：release 提交必须有对应 tag，tag 指向的版本要对
+  python3 scripts/ci/guard.py deps            # 依赖闸：代码 import 的第三方包必须在 requirements 里声明
   python3 scripts/ci/guard.py all [REF]
 
 背景（2026-10-19）：两个旧仓都因为「开发库本地 .git 仍是旧历史，只换 remote 就 push」
@@ -65,6 +67,27 @@ HOSTNAME_LIKE = re.compile(r"\b[A-Z]\d{10,}\b")
 
 IP_RE = re.compile(r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])")
 IP_ALLOW_EXACT = {"127.0.0.1", "0.0.0.0", "1.2.3.4", "5.6.7.8", "255.255.255.255", "255.255.255.0"}
+# 2026-10-29 加固：内网机器简称（两段式地址写法，后面跟端口或「生产/主库」这类上下文词）。
+# IP_RE 要求四段，这种简称拦不住，但对外仍是「哪台机器在跑」的线索，统一改示例段。
+# 判据取「第二段 >= 2 位数字」并排除后跟量词，避免把「生产 3.9 万条」这类数量写法误判成主机。
+SHORT_HOST_PORT = re.compile(r"(?<![\d.])(\d{1,3}\.\d{2,3})\s*[:：]\s*\d{2,5}(?![\d.])")
+PROD_SHORT_HOST = re.compile(
+    r"(生产|内网|线上|主库)\s+(\d{1,3}\.\d{2,3})(?![\d.])"
+    r"(?!\s*(?:万|亿|%|％|元|倍|秒|条|页|次|天|台|个|款|人))")
+DOC_IPS = ("192.0.2", "198.51.100", "203.0.113")
+# 发布闸：写了 release 提交却没有对应 tag = 这个版本对外装不到；tag 指错提交同样要拦。
+VERSION_PATH = "scripts/kb_lib/config.py"
+VERSION_RE = re.compile(r'^VERSION\s*=\s*["\'](\d+\.\d+\.\d+)["\']', re.M)
+RELEASE_SUBJ = re.compile(r"release:\s*v?(\d+\.\d+\.\d+)", re.I)
+# 依赖闸：import 名与发行包名不同名的常见映射（漏声明的表现是「没装就静默回落内置默认」）。
+REQ_FILES = ("requirements.txt", "requirements-optional.txt", "requirements-dev.txt")
+IMPORT_ALIAS = {
+    "yaml": "pyyaml", "sklearn": "scikit_learn", "cv2": "opencv_python",
+    "pil": "pillow", "bs4": "beautifulsoup4", "dateutil": "python_dateutil",
+    "fitz": "pymupdf", "dotenv": "python_dotenv", "docx": "python_docx",
+    "faiss": "faiss_cpu",
+}
+IMPORT_TOP = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)", re.M)
 # 闸门自身与 CI 配置必须含 /root/ 字面量才能表达规则，单独豁免。
 SELF_EXEMPT = re.compile(r"(^scripts/ci/guard\.py$|^\.github/)")
 TEXT_EXT = (".py", ".js", ".cjs", ".mjs", ".ts", ".sh", ".md", ".yml", ".yaml", ".json",
@@ -139,6 +162,14 @@ def check_content(files):
                 if not ip_ok(m.group(1)):
                     masked = ".".join(m.group(1).split(".")[:2]) + ".x.x"
                     errs.append(f"{p}:{n} 出现真实 IP {masked}（请用 192.0.2.x 文档段或配置项）")
+            m = SHORT_HOST_PORT.search(line)
+            if m and not any(m.group(1).startswith(d) for d in DOC_IPS):
+                errs.append(f"{p}:{n} 出现内网机器简称 {m.group(1).split('.')[0]}.x.x:端口"
+                            f"（请写 192.0.2.x 示例段或「生产实例」）")
+            m = PROD_SHORT_HOST.search(line)
+            if m and not any(m.group(2).startswith(d) for d in DOC_IPS):
+                errs.append(f"{p}:{n} 出现内网机器简称 {m.group(1)} {m.group(2).split('.')[0]}.x.x"
+                            f"（请写「生产实例」）")
             if "/root/" in line and not SELF_EXEMPT.search(p):
                 errs.append(f"{p}:{n} 出现 /root/ 绝对路径（请写 $KB_ROOT）")
             for name in OLD_REPO_NAMES:
@@ -151,6 +182,88 @@ def check_content(files):
             if m:
                 errs.append(f"{p}:{n} 出现疑似真机主机名（大写字母+长数字）")
     return errs
+
+
+def check_release_tags(ref="HEAD"):
+    """发布闸：历史里每个 `release: X.Y.Z` 提交都要有同名 tag，且 tag 指向的提交版本要对得上。
+
+    实证背景（2026-10-29）：CHANGELOG 记到 1.0.16，实际 tag 只到 v1.0.9 ——
+    1.0.10 之后的版本在 GitHub 上没有锚点，按 tag 取代码的人拿不到对应版本。
+    发布流程（.github/workflows/release.yml）只在推 main 时给「当前 VERSION」打 tag，
+    漏掉的歷史版本不会自己补回来，所以这条单独设闸。
+    """
+    errs = []
+    seen = []
+    for line in git("log", "--format=%H%x09%s", ref).splitlines():
+        h, _, subj = line.partition("\t")
+        m = RELEASE_SUBJ.search(subj)
+        if m:
+            seen.append((m.group(1), h, subj.strip()))
+    for ver, h, subj in seen:
+        tag = f"v{ver}"
+        if not git("tag", "-l", tag).strip():
+            errs.append(f"{tag} 缺失：发布提交 {h[:7]}「{subj[:40]}」已合入，但仓库没有这个 tag")
+            continue
+        mv = VERSION_RE.search(git("show", f"{tag}:{VERSION_PATH}"))
+        if not mv:
+            errs.append(f"{tag} 指向的提交读不到 {VERSION_PATH} 的 VERSION，无法核对")
+        elif mv.group(1) != ver:
+            errs.append(f"{tag} 指向的提交里 VERSION 是 {mv.group(1)}，tag 打错了")
+    return errs
+
+
+def _pkg_norm(name):
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def declared_requires():
+    """requirements 三个文件里声明过的包名（按 PEP 503 归一化）。"""
+    out = set()
+    for f in REQ_FILES:
+        try:
+            text = open(f, encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            name = re.split(r"[<>=!~;\[\s]", line, 1)[0].strip()
+            if name:
+                out.add(_pkg_norm(name))
+    return out
+
+
+def check_deps(files=None):
+    """依赖闸：代码 import 的第三方包必须在 requirements 里声明过。
+
+    实证背景（2026-10-27）：write_policy 用 yaml 读 rules.yaml，但 PyYAML 当时没声明，
+    表现是没装就静默回落内置默认规则 —— 环境不同结果不同，最难查的一类坑。
+    """
+    files = tracked() if files is None else files
+    py = [p for p in files if p.endswith(".py") and os.path.isfile(p)]
+    declared = declared_requires()
+    local = {"scripts", "tests"}
+    for p in py:
+        parts = p.split("/")
+        local.update(seg.replace("-", "_") for seg in parts[:-1])
+        local.add(parts[-1][:-3].replace("-", "_"))
+    std = set(getattr(sys, "stdlib_module_names", set()))
+    missing = {}
+    for p in py:
+        try:
+            text = open(p, encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for m in IMPORT_TOP.finditer(text):
+            top = m.group(1).split(".")[0]
+            if not top or top.startswith("_") or top in std or top in local:
+                continue
+            name = _pkg_norm(IMPORT_ALIAS.get(top, top))
+            if name not in declared:
+                missing.setdefault(name, p)
+    return [f"{name} 被代码 import（{p}）却没写进 {', '.join(REQ_FILES)}"
+            for name, p in sorted(missing.items())]
 
 
 def check_authors(ref="HEAD"):
@@ -178,11 +291,15 @@ def main():
     errs = []
     if mode in ("history", "all"):
         errs += check_history(ref)
-    files = tracked() if mode in ("paths", "content", "all") else []
+    files = tracked() if mode in ("paths", "content", "all", "deps") else []
     if mode in ("paths", "all"):
         errs += check_paths(files)
     if mode in ("content", "all"):
         errs += check_content(files)
+    if mode in ("release", "all"):
+        errs += check_release_tags(ref)
+    if mode in ("deps", "all"):
+        errs += check_deps(files)
     if mode in ("authors", "history", "all"):
         errs += check_authors(ref)
     if errs:

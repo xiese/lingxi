@@ -168,7 +168,7 @@
 
 ### 背景
 
-生产 1.92 每次启动都打一条：
+生产实例（示例段 192.0.2.10）每次启动都打一条：
 
 ```
 settings 含未知键（拼错将静默无效，请核对）: ['_jina_backup', 'embedding_proxy', 'embedding_request_gap', 'embedding_tokens_per_min']
@@ -214,7 +214,7 @@ settings 含未知键（拼错将静默无效，请核对）: ['_jina_backup', '
 
 ### 背景
 
-生产 1.92:8899 出现「进程 active、`/health` 有时还回 200，但搜索请求全部超时」的形态。
+生产实例（示例段 192.0.2.10:8899）出现「进程 active、`/health` 有时还回 200，但搜索请求全部超时」的形态。
 根因不是死锁：
 
 ```
@@ -414,7 +414,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 - 另在写入前手工备份一份到 `50-档案/_旧版本/知识库项目.md.bak-版本历史补写-20261022-1735`
   （md5 `af9308b8…`，16137 字节），双保险。
 
-### 验证（生产 1.92 实测）
+### 验证（生产实例 192.0.2.10 实测）
 
 | 项 | 结果 |
 |---|---|
@@ -493,7 +493,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 
 - 仓库：`pytest tests/ scripts/tests/` → **594 passed, 7 skipped**，零失败
 - 编译：`compileall` 全通过
-- 端到端（1.92 临时实例 :8902，`KB_ROOT` 指向生产但只读）：
+- 端到端（生产实例 192.0.2.10 的临时副本 :8902，`KB_ROOT` 指向生产但只读）：
   - 问「知识库现在是什么版本」→ 回答第一句变成「按 2026-10-17 的记录…」，
     并明确提示「库里最新的相关记录只到 2026-10-17，之后再无版本变更记录入库」，
     不再把旧数字直接当现状。
@@ -556,7 +556,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 ### 验证
 
 - `ast.parse` 语法通过；`@mcp.tool()` 计数 16，与运行版工具名集合完全一致（双向差集为空）
-- 连生产 1.92 实测 9 个只读工具全部返回正常：
+- 连生产实例（192.0.2.10）实测 9 个只读工具全部返回正常：
   `memory_search`（命中 2）、`kb_search`（语义 3 条）、`kb_dual_search`、
   `kb_read`（2,127 字符）、`kb_list`、`kb_mentions`（6 篇 21 处）、
   `kb_index_status`（indexed=1795, consistent=true）、`kb_dashboard`、`kb_note_hygiene`
@@ -601,7 +601,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
   - 搜「xyz不存在」→ 正确显示无匹配
   - 点进 `60-梦境` → 27 篇，面包屑「🏠 全部 / 📂 梦境」，返回后回到文件夹层
 
-### 部署（生产 1.92）
+### 部署（生产实例 192.0.2.10）
 
 走「打包复制」而非 `deploy.sh`（push 被禁用、本地领先 10 commit）。
 
@@ -640,7 +640,7 @@ GitHub 根提交 `7794127`（10-20 `filter-repo` 重建）。直接推送会抹�
 | 笔记 | 日期开头的非事件型笔记保留 `YYYY-MM-DD_` 前缀；`60-梦境` 进目录树与搜索；新建项目自动生成五段主文档 |
 | Web | 主题插件化、模板插件化、插件商城页、设置页按组重做；知识图谱去蜘蛛网化；`usage-boost` 两层目录过滤支持笔记名匹配 |
 
-### 生产部署（1.92）
+### 生产部署（生产实例 192.0.2.10）
 
 - 方式：打包复制（Release 未确认生成，见下方遗留）。包 `kb-1.0.4.tar.gz`，0.76 MB，
   sha256 `493af865…2e9bd`，196 个文件，无个人数据与密钥。
