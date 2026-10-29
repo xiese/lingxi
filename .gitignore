@@ -1,6 +1,13 @@
 # ── 运行期状态与私有数据（绝对不要提交）──
 .api_tokens.json
+.api_tokens.json.lock
 .kb_settings.json
+.kb_auth_watch_state.json
+.kb_plugins.json
+.kb-cli.json
+.kb_version
+.kb-env
+kb-cli.json
 .audit.db
 .audit.db-wal
 .audit.db-shm
@@ -13,34 +20,40 @@
 .faiss.index.ids.json
 .index_manifest.json
 .dev_progress.json
-kb-cli.json
-.kb_auth_watch_state.json
-.api_tokens.json.lock
-.kb_plugins.json
+kb.db
+kb.db-wal
+kb.db-shm
 
 # ── 个人笔记内容（不属于代码仓库）──
 笔记/
 00-索引/
 _assets/
+_spec/
+.claude/
 
 # ── 本地配置 ──
 .env
-.kb-cli.json
 *.local
 
-# ── 备份与临时产物 ──
+# ── 备份与临时产物（备份目录一律放仓库外）──
 *.bak
 *.bak-*
 *.bak_*
 _bak-*/
+_备份/
 .doc_cleanup_backup_*/
 .organize_backup_*/
 *.tmp
 *.npy.tmp.npy
 *.log
-.pytest_cache/
 .health.log
 .cron-*.log
+.pytest_cache/
+
+# ── 发布包与部署状态一律不入库（2026-10-20 隐私整改）──
+releases/
+current
+.deploy-state.json
 
 # ── Python ──
 __pycache__/
@@ -56,35 +69,8 @@ jieba.cache
 .DS_Store
 Thumbs.db
 
-# ── 运行期状态与备份产物（2026-10-06 补：原 .gitignore 未覆盖这些）──
-.index_manifest.json
-.dev_progress.json
-_assets/
-_bak-*/
-.doc_cleanup_backup_*/
-jieba.cache
-kb.db
-kb.db-wal
-kb.db-shm
-_spec/
-.claude/
+# ── 仓内一次性报告与脚本产物 ──
 scripts/.stub-list.md
 scripts/.tag-gov-report.md
 scripts/kb-cli/three_stage_plan.*
 tests/golden_search.json
-
-# 本地/编辑器产物预防性忽略（2026-10-07 补）
-.editorconfig
-.kb_version
-
-# ── 备份目录一律放仓库外（2026-10-17 合库）──
-_bak-*/
-_备份/
-.doc_cleanup_backup_*/
-.kb-env
-
-# ── 发布包与部署状态一律不入库（2026-10-20 隐私整改）──
-releases/
-current
-.deploy-state.json
-*release-deploy*.sh
