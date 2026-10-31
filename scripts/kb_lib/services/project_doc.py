@@ -30,7 +30,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .write_policy import ALLOWED_PROJECT_SUBDIRS
+from .write_policy import (
+    ALLOWED_PROJECT_SUBDIRS,
+    PROJECT_DOC_SUFFIX,
+    PROJECT_OVERVIEW_NAME,
+)
 
 log = logging.getLogger("kb.project_doc")
 
@@ -70,11 +74,12 @@ schema_version: 1
 ## 后续建议
 下一步要做什么、有哪些待办。
 """
-DOC_SUFFIX = "项目.md"
+DOC_SUFFIX = PROJECT_DOC_SUFFIX      # 与 rules.yaml 同源（project.doc_suffix_for_ledger）
 # 规则 4（2026-10-26）：存量项目的「总览入口」用的另一个文件名。
 # 只用于**识别既有入口**，不用于生成 —— 生成仍走 doc_name()，避免一次改动
 # 就把所有新项目的主文档改名。
-OVERVIEW_NAME = "项目总览.md"
+# 2026-10-31：改为与 rules.yaml 同源（project.overview_name），本模块不再自带字面量。
+OVERVIEW_NAME = PROJECT_OVERVIEW_NAME
 REFRESH_INTERVAL = 60.0          # 同项目聚合刷新窗口（秒）
 MAX_RECENT = 10                  # 「最近笔记」最多保留条数
 
@@ -490,8 +495,11 @@ def on_project_note_written(notes_dir, note_path, note_rel: str, note_type: str)
         # 2026-10-26 第二轮：`note_normalizer` 判定事件型后会自动把落点追加成
         # `10-项目/<项目>/日志/` 或 `/排障/`。若直接拿 parent 当项目目录，就会在
         # 日志子目录里生成一份 `日志项目.md`，凭空造出「假项目」——生产上曾有 5 处。
-        # 这里往上找一层：parent 若是分类子目录，真正的项目目录是它的上一级。
-        if project_dir.name in ALLOWED_PROJECT_SUBDIRS:
+        # 2026-10-31：改成**循环上溯**。原先只上溯一层，`<项目>/日志/排障/x.md`
+        # 这类两层嵌套会把 `日志` 当成项目目录，照样造出「日志项目.md」（审查指出）。
+        _hops = 0
+        while project_dir.name in ALLOWED_PROJECT_SUBDIRS and _hops < 16:
+            _hops += 1
             project_dir = project_dir.parent
             if (project_dir.resolve() == root.resolve()
                     or root.resolve() not in project_dir.resolve().parents):

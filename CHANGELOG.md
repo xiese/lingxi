@@ -12,11 +12,18 @@
 | `routes/routes_files.py`、`routes/routes_llm.py` | 上传 / 智能上传（含更新）补队列标记 |
 | `scripts/ci/guard.py` | `IMPORT_ALIAS` 查找做大小写归一（`from PIL import Image` 原先误报依赖缺失） |
 
+### 遗留两项的后续修复（同日第二轮）
+
+| 文件 | 内容 |
+|---|---|
+| `services/write_policy.py` | `_project_subdir_segments` 只剥配置里的项目根目录（原先剥任意 `^\d{2}-` 前缀，会把以数字开头的真实项目名当层级剥掉、让守卫整体错位）；子目录守卫改为**逐段检查**（原只看第一段，`<项目>/日志/排障/` 的第二层漏网）；新增 4 个公开别名（`PROJECT_LEDGER_FILE` / `PROJECT_ROOT_DIR` / `PROJECT_OVERVIEW_NAME` / `PROJECT_DOC_SUFFIX`）供其它模块取值 |
+| `services/project_doc.py` | `DOC_SUFFIX` / `OVERVIEW_NAME` 改为经 `write_policy` 取值，消除与 `rules.yaml` 的两处真相源；子目录归一由「只上溯一层」改为**循环上溯**（两层分类嵌套原先会造出「日志项目.md」假入口） |
+
 ### 验证
 
-全量 `13 failed / 715 passed`（13 个失败全部为既有的 `test_path_probe.py`，与本批无关，
+全量 `13 failed / 724 passed`（13 个失败全部为既有的 `test_path_probe.py`，与本批无关，
 与改动前基线逐条一致）；`scripts/ci/guard.py all` 通过；端到端四用例全绿。
-新增回归用例 7 条，每条对应一个审查发现。
+新增回归用例 16 条，每条对应一个审查发现或一处修复。
 
 ## 1.0.16
 

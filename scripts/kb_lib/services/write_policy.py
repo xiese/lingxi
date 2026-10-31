@@ -120,6 +120,10 @@ __all__ = [
     "OVERVIEW_REFRESH_ENABLED",
     "OVERVIEW_REFRESH_INTERVAL_MIN",
     "OVERVIEW_PENDING_FILE",
+    "PROJECT_LEDGER_FILE",
+    "PROJECT_ROOT_DIR",
+    "PROJECT_OVERVIEW_NAME",
+    "PROJECT_DOC_SUFFIX",
     "required_sections_for",
     "validate_note_quality",
     "validate_write_hygiene",
@@ -364,7 +368,11 @@ def _project_subdir_segments(note_type: str, sd_norm: str) -> Optional[List[str]
     if note_type != "project" or not sd_norm:
         return None
     segs = [p for p in sd_norm.split("/") if p]
-    if segs and re.match(r"^\d{2}-", segs[0]):
+    # 只剥**配置里的项目根目录名**（如 10-项目），不是任何 `^\d{2}-` 前缀。
+    # 旧写法 `re.match(r"^\d{2}-", segs[0])` 会把真实项目名也当层级剥掉
+    # （例如项目叫「99-实验场」时），后续的深度/动作词/登记守卫就会按错误的
+    # 段号判断，守卫整体错位（2026-10-31 审查轮1 指出）。
+    if segs and segs[0] == _PROJECT_ROOT_DIR:
         segs = segs[1:]
     return segs
 
@@ -497,6 +505,14 @@ _PROJECT_ROOT_DIR = str((_RULES.get("project") or {}).get("root_dir") or "10-项
 _PROJECT_OVERVIEW_NAME = str((_RULES.get("project") or {}).get("overview_name") or "项目总览.md")
 # 存量主档的后缀：`10-项目/<名>项目.md`
 DOC_SUFFIX_FOR_LEDGER = str((_RULES.get("project") or {}).get("doc_suffix_for_ledger") or "项目.md")
+# ── 对外公开别名（2026-10-31）──
+# 其它模块（services/project_doc.py 等）要用这些值时**必须从这里取**：
+# 那边原先各自硬编码了一份「项目总览.md」「项目.md」，改 rules.yaml 时它不跟随，
+# 于是同一个语义出现两处真相源 —— 与本仓「规则收敛到 rules.yaml」的方向相悖。
+PROJECT_LEDGER_FILE = _PROJECT_LEDGER_FILE
+PROJECT_ROOT_DIR = _PROJECT_ROOT_DIR
+PROJECT_OVERVIEW_NAME = _PROJECT_OVERVIEW_NAME
+PROJECT_DOC_SUFFIX = DOC_SUFFIX_FOR_LEDGER
 # 项目内唯一允许的分类子目录（规则 3 补丁，2026-10-26 第二轮）。
 # 前三个是规则表写明的「配置/更新/专题」；后两个是 note_normalizer 自动追加的
 # 事件型落点（log_subdir / troubleshoot_subdir 的默认值）。这五个名字必须与
@@ -612,33 +628,40 @@ def _guard_project_subdir_unregistered(
       1. 只认白名单 `ALLOWED_PROJECT_SUBDIRS`（配置/更新/专题/日志/排障）；
       2. 目录**已经存在**就放行 —— 存量欠账不能把正常写入锁死；
       3. 台账读不到（None）也放行 —— 守卫失效必须退化成不拦。
+
+    **逐段检查**（不止第一段）：`10-项目/<项目>/日志/排障/x.md` 这种两层嵌套，
+    旧实现只看 `segs[1]`，`日志` 在白名单里就直接放行，第二层的 `排障` 成了漏网
+    —— 而它正是 `project_doc` 会拿去做项目目录的那一段（2026-10-31 审查指出）。
     """
     segs = _project_subdir_segments(note_type, sd_norm)
     if not segs or len(segs) < 2:
         return None            # 只有项目名、没有子目录，不归本守卫管
     if notes_dir is None:
         return None
-    sub = segs[1]
-    if sub in ALLOWED_PROJECT_SUBDIRS:
-        return None
     root = Path(notes_dir) / _PROJECT_ROOT_DIR
-    try:
-        if (root / segs[0] / sub).is_dir():
-            return None        # 存量子目录，放行
-    except OSError:
-        return None
-    names = _registered_project_names(notes_dir)
-    if names is None:
-        return None
-    return {
-        "error": "project_subdir_unregistered",
-        "detail": f"项目内新开子目录不在白名单：{segs[0]}/{sub}",
-        "hint": (
-            "项目内只允许 " + "/".join(ALLOWED_PROJECT_SUBDIRS) +
-            " 这五个分类子目录。这篇文档请直接放进项目目录（subdir=<项目名>），"
-            "不要为一次任务在项目内部再开目录。"
-        ),
-    }
+    for i in range(1, len(segs)):
+        sub = segs[i]
+        if sub in ALLOWED_PROJECT_SUBDIRS:
+            continue
+        try:
+            if root.joinpath(*segs[: i + 1]).is_dir():
+                continue       # 存量子目录，放行
+        except OSError:
+            return None
+        names = _registered_project_names(notes_dir)
+        if names is None:
+            return None
+        return {
+            "error": "project_subdir_unregistered",
+            "detail": f"项目内新开子目录不在白名单：{'/'.join(segs[: i + 1])}",
+            "hint": (
+                "项目内只允许 " + "/".join(ALLOWED_PROJECT_SUBDIRS) +
+                " 这些分类子目录（只允许一层，不要再往下套）。"
+                "这篇文档请直接放进项目目录（subdir=<项目名>），"
+                "不要为一次任务在项目内部再开目录。"
+            ),
+        }
+    return None
 
 
 def _project_overview_warnings(
