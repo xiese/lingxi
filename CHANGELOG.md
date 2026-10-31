@@ -1,3 +1,23 @@
+## 1.0.17
+
+2026-10-31。三路异构模型审查（本分支 10 个提交 + 当时的工作区改动）后的加固，共 14 项。
+未单独发版，随下一版一起发布；完整说明见知识库「知识库项目」下的审查指针笔记。
+
+### 修复
+
+| 文件 | 内容 |
+|---|---|
+| `services/write_policy.py` | 总览待刷新队列：加进程内锁 + 唯一临时名（原固定临时名会被并发 writer 互踩写出半截 JSON）、文件损坏时先备份 `.corrupt-*` 再重建（原先静默重置为 `{}`，条目全丢无痕迹）、路径判据收紧为「至少三段」、队列路径加 containment 校验；`importance` 改判 frontmatter 顶层键（原用正文子串匹配会误判）；常量兜底默认改取「不改变现状」一侧；`_load_rules` 静默吞异常改为留日志；`FORCE_REFRESH_ACTIONS` 加类型校验（yaml 误写成字符串会被拆成单字符集合） |
+| `routes/routes_notes.py` | 修回归：`rel` 的计算不再让 `relative_to` 异常吃掉写后刷新（原先会整体跳过缓存失效与索引刷新）；删除 / 移动（含批量）补队列标记 |
+| `routes/routes_files.py`、`routes/routes_llm.py` | 上传 / 智能上传（含更新）补队列标记 |
+| `scripts/ci/guard.py` | `IMPORT_ALIAS` 查找做大小写归一（`from PIL import Image` 原先误报依赖缺失） |
+
+### 验证
+
+全量 `13 failed / 715 passed`（13 个失败全部为既有的 `test_path_probe.py`，与本批无关，
+与改动前基线逐条一致）；`scripts/ci/guard.py all` 通过；端到端四用例全绿。
+新增回归用例 7 条，每条对应一个审查发现。
+
 ## 1.0.16
 
 2026-10-27 发布。把写入规则从代码里的散落常量收敛成 `rules.yaml` 单一真相源，

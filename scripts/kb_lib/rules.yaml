@@ -13,6 +13,19 @@ quality:
     - "## 实施步骤"
     - "## 验证结果"
     - "## 后续建议"
+  # ── 2026-10-31 新增（知识库规则反哺 · 第 2 条）──
+  # 写入必带的 frontmatter 字段。
+  # ⚠️ 消费方 = **扫存量笔记的巡查作业**（尚未实现）；API 写路径不消费它 ——
+  #    服务端写入时必然会生成 title/type/status（不传就是 draft），写入时校验天然无效。
+  required_fields:
+    - "title"
+    - "type"
+    - "status"
+  # status 默认提示：默认 **关**。
+  # 理由：服务端必然生成 status（不传就是 draft），打开后**所有**未传 status 的写入
+  # 都会多一条 warning，调用方（上传/智能上传）全是噪声；真正该做的是巡查作业扫库。
+  # 需要时改成 true 即可（老测试与调用方的行为契约会随之变化，改前先跑全量）。
+  status_default_notice: false
 
 # ---- 写后动作 ----
 force_refresh_actions:
@@ -36,3 +49,15 @@ project:
     - "日志"
     - "排障"
   forbidden_path_substrings: []   # 预留：路径黑名单（当前由 _FORBIDDEN_PATH_SUBSTRINGS 实现）
+  # ── 2026-10-31 新增（知识库规则反哺 · 第 1、4 条）──
+  # 总览页必须带的检索字段（缺则 warning，不硬拦）。
+  # 不含 title：总览的 title 恒为「项目总览」才会走到检查，检查它没有意义；
+  # 搜项目名能不能命中靠的是 tags / aliases。
+  # 代码侧兜底默认是空列表（规则键缺失 = 不检查，不改变现状），清单以本处为准。
+  overview_required_fields:
+    - "tags"
+    - "aliases"
+    - "importance"
+  overview_refresh_enabled: true  # 写笔记后是否标记「该项目总览待刷新」
+  overview_refresh_interval_min: 60   # 队列消费最小间隔（分钟）；设置页可改
+  overview_pending_file: ".kb/overview_pending.json"   # 待刷新队列（.kb 不入库）

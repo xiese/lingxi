@@ -472,10 +472,12 @@ def read_note(np):
     })
 
 
-def _hygiene_path_guards(nt: str, sd: str, title: str, content: str):
+def _hygiene_path_guards(nt: str, sd: str, title: str, content: str,
+                         tags=None, aliases=None, status=None):
     """写时卫生硬拦（跨平台 REST/MCP 共用）。返回 (error_dict|None, warnings).
 
     实现已迁入 services.write_policy；此包装保留兼容旧调用点。
+    2026-10-31：新增 tags/aliases/status 透传（总览四件套检查 + status 默认提示）。
     """
     return write_policy.validate_write_hygiene(
         note_type=nt,
@@ -485,6 +487,9 @@ def _hygiene_path_guards(nt: str, sd: str, title: str, content: str):
         notes_dir=NOTES_DIR,
         type_map=TYPE_MAP,
         sanitize_fn=sanitize,
+        tags=tags,
+        aliases=aliases,
+        status=status,
     )
 
 
@@ -536,7 +541,12 @@ def create_note():
     )
     if qerr:
         return jsonify(qerr), 400
-    guard_err, hygiene_warnings = _hygiene_path_guards(nt, sd, title, content_body)
+    guard_err, hygiene_warnings = _hygiene_path_guards(
+        nt, sd, title, content_body,
+        tags=d.get("tags", []) or [],
+        aliases=d.get("aliases", []) or [],
+        status=d.get("status", "") or "",
+    )
     if guard_err:
         return jsonify(guard_err), 400
     defaults = _token_defaults()
@@ -562,7 +572,12 @@ def create_note():
         _tp2 = str(TYPE_MAP.get(_nt2, "") or "")
         if _tp2 and (_sd2 == _tp2 or _sd2.startswith(_tp2 + "/")):
             _sd2 = _sd2[len(_tp2):].lstrip("/")
-        _gerr2, _gw2 = _hygiene_path_guards(_nt2, _sd2, title, content_body)
+        _gerr2, _gw2 = _hygiene_path_guards(
+            _nt2, _sd2, title, content_body,
+            tags=d.get("tags", []) or [],
+            aliases=d.get("aliases", []) or [],
+            status=d.get("status", "") or "",
+        )
         if _gerr2:
             log.warning("规范化落点被写时闸门拒绝，退回原逻辑: %s", _gerr2)
             _norm = None
@@ -683,8 +698,18 @@ def create_note():
                 _dedup["dedup_degraded"] = _dd_reason
     fp.write_text(full_content, encoding="utf-8")
     meta, _ = parse_fm(full_content)
-    write_policy.on_note_changed(action=action, force_search_refresh=False)
-    rel = str(fp.relative_to(NOTES_DIR))
+    # 第 4 条（2026-10-31）：rel 供「总览待刷新」队列用；notes_dir 必须一起传，
+    # 否则 mark_overview_pending 拿不到笔记根会安静跳过。
+    # ⚠️ rel 的异常**绝不能**吃掉 on_note_changed —— 原来写成
+    #    `rel = str(fp.relative_to(...))` 再调用，relative_to 抛 ValueError 时
+    #    缓存失效与索引刷新会被整体跳过（2026-10-31 审查轮3 指出的回归）。
+    rel = ""
+    try:
+        rel = str(fp.relative_to(NOTES_DIR))
+    except ValueError:
+        log.warning("create_note 落盘路径不在 NOTES_DIR 内，跳过队列标记: %s", fp)
+    write_policy.on_note_changed(action=action, force_search_refresh=False,
+                                 rel_path=rel or None, notes_dir=NOTES_DIR)
     # 反链增量维护：只重算这一篇的出链，不做全库扫描。
     try:
         from ..services import backlinks as _bl
@@ -867,8 +892,14 @@ def save_note(np):
             log.warning(f"save_note 旧版归档失败 [{np}]: {e}")
     fp.write_text(content, encoding="utf-8")
     meta, _ = parse_fm(content)
-    write_policy.on_note_changed(action="saved", force_search_refresh=False)
-    rel = str(fp.relative_to(NOTES_DIR))
+    # 第 4 条（2026-10-31）：同上。rel 的异常不能吃掉写后刷新（见 create_note 处说明）
+    rel = ""
+    try:
+        rel = str(fp.relative_to(NOTES_DIR))
+    except ValueError:
+        log.warning("save_note 落盘路径不在 NOTES_DIR 内，跳过队列标记: %s", fp)
+    write_policy.on_note_changed(action="saved", force_search_refresh=False,
+                                 rel_path=rel or None, notes_dir=NOTES_DIR)
     audit_log("note_updated", rel, request.method, 200)
     payload = {"action": "saved", "path": rel, "info": finfo(fp, pre_meta=meta)}
     if _archive_info:
@@ -886,7 +917,9 @@ def delete_note(np):
         return err, code
     dest = _archive_file(fp)
     # 统一写后出口：删除强制绕过冷却
-    write_policy.on_note_changed(action="deleted", force_search_refresh=True)
+    # 第 4 条（2026-10-31）：删除也要标记该项目总览待刷新（总览里的索引项会失效）
+    write_policy.on_note_changed(action="deleted", force_search_refresh=True,
+                                 rel_path=np, notes_dir=NOTES_DIR)
     from_path = np  # np 来自 URL，即相对路径
     to_path = str(dest.relative_to(NOTES_DIR))
     audit_log("note_archived", to_path, request.method, 200, extra=f"from={from_path}")
@@ -1150,7 +1183,11 @@ def move_note(np):
         dry_run=bool(d.get("dry_run", False)),
     )
     if status == 200 and not payload.get("dry_run"):
-        write_policy.on_note_changed(action="moved", force_search_refresh=True)
+        # 第 4 条（2026-10-31）：移动后**源与目标**都可能落在项目目录里，两边都要标记
+        write_policy.on_note_changed(action="moved", force_search_refresh=True,
+                                     rel_path=np, notes_dir=NOTES_DIR)
+        if to_rel:
+            write_policy.mark_overview_pending(to_rel, action="moved", notes_dir=NOTES_DIR)
     return jsonify(payload), status
 
 
@@ -1180,6 +1217,15 @@ def move_notes_batch():
         results.append(p)
     if not dry_run and ok:
         write_policy.on_note_changed(action="moved", force_search_refresh=True)
+        # 第 4 条（2026-10-31）：批量移动 —— 逐条标记队列（源 + 目标）。
+        # 这里直接调 mark_overview_pending，不再重复触发索引刷新。
+        for _it in items:
+            if not isinstance(_it, dict):
+                continue
+            for _p in (_it.get("from"), _it.get("to")):
+                if _p:
+                    write_policy.mark_overview_pending(
+                        _p, action="moved", notes_dir=NOTES_DIR)
     return jsonify({"dry_run": dry_run, "total": len(items),
                     "succeeded": ok, "results": results}), 200
 

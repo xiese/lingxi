@@ -156,7 +156,9 @@ def upload_file():
         rel = str(dest.relative_to(KB_ROOT))
     if ext == ".md":
         # 方案 B：md 上传走统一写后出口（内部仍看 index_auto_rebuild）
-        write_policy.on_note_changed(action="uploaded", force_search_refresh=False)
+        # 第 4 条（2026-10-31）：上传也算「写」，落在项目目录里要标记总览待刷新
+        write_policy.on_note_changed(action="uploaded", force_search_refresh=False,
+                                     rel_path=rel, notes_dir=NOTES_DIR)
     audit_log("upload", rel, request.method, 201, extra=f"type={ftype or 'auto'} size={dest.stat().st_size}")
     payload = {"path": rel, "size": dest.stat().st_size, "filename": dest.name}
     if dest.stem != _stem:

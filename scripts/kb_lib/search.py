@@ -1209,7 +1209,29 @@ class SearchIndex:
             _total = len(self.contents)
             _progress_set_total(_total)
             all_embeds = []
+            # 2026-10-31：单轮全量嵌入总时间预算（秒），要调整只改这一行。
+            # 本函数在 incremental_refresh 的 self.lock 内被调用（见
+            # _apply_incremental_docs_locked），而 embedding_api 是网络调用，
+            # 单批预算 90 秒（embed.py 的 _HTTP_CALL_BUDGET）。上游变慢时
+            # 124 批 x 90 秒 约 3.1 小时全程持锁，检索全线超时、服务假死
+            # （2026-10-31 16:24 实测：waitress 队列积压到 53 层）。
+            # 正常时 124 批约 40 秒，300 秒留约 7 倍余量。
+            # 超预算即中止本轮，并把 embeddings 置空以强制对齐校验失败，
+            # 由调用方回滚到刷新前快照，下次刷新重试。
+            _full_embed_budget = 300.0
+            _t0 = time.monotonic()
             for i in range(0, _total, batch_size):
+                if (time.monotonic() - _t0) > _full_embed_budget:
+                    import logging as _logging
+                    _logging.getLogger(__name__).error(
+                        "全量嵌入超出单轮预算 %ss（已处理 %d/%d），中止本轮并强制回滚",
+                        _full_embed_budget, i, _total,
+                    )
+                    self.embeddings = None
+                    self.faiss_index = None
+                    self.index_consistent = False
+                    self.consistency_reason = "full_embed_budget_exceeded"
+                    return
                 batch = self.contents[i : i + batch_size]
                 embeds = embedding_api(batch, task="retrieval.passage")
                 all_embeds.append(embeds)

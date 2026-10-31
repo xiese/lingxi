@@ -173,6 +173,15 @@ def test_alias_mapping(guard, monkeypatch, tmp_path):
     assert guard.check_deps(files) == [], "别名映射没生效"
 
 
+def test_alias_mapping_case_insensitive(guard, monkeypatch, tmp_path):
+    """`from PIL import Image` 取到的 top 是 "PIL"，而别名表键是小写 "pil" ——
+    不做大小写归一化会漏匹配、误报「pillow 没写进 requirements」（2026-10-31 修复）。"""
+    files = _make_tree(tmp_path, monkeypatch,
+                       "from PIL import Image\n",
+                       {"requirements.txt": "pillow==11.0.0\n"})
+    assert guard.check_deps(files) == [], "PIL → pillow 的别名大小写没归一化"
+
+
 # ---------- ⑥ 真仓当前状态必须全绿 ----------
 
 def test_real_repo_content_clean(guard):

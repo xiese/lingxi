@@ -259,7 +259,10 @@ def check_deps(files=None):
             top = m.group(1).split(".")[0]
             if not top or top.startswith("_") or top in std or top in local:
                 continue
-            name = _pkg_norm(IMPORT_ALIAS.get(top, top))
+            # 别名键是小写（"pil"→"pillow"），而 import 名可能带大写（PIL）：
+            # 不做大小写归一化会让 `import PIL` 漏匹配、误报「依赖没写进 requirements」
+            # （2026-10-31 审查轮2 指出）
+            name = _pkg_norm(IMPORT_ALIAS.get(top) or IMPORT_ALIAS.get(top.lower()) or top)
             if name not in declared:
                 missing.setdefault(name, p)
     return [f"{name} 被代码 import（{p}）却没写进 {', '.join(REQ_FILES)}"

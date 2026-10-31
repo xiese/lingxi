@@ -10,23 +10,35 @@ from __future__ import annotations
 import os
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# 规则常量：优先读 rules.yaml（与 write_policy.py 同目录），缺失时回落内置默认
+# 规则常量：优先读 rules.yaml。
+# 本文件在 kb_lib/services/ 下，故取 parent.parent（即 kb_lib/rules.yaml）——
+# 不是「与 write_policy.py 同目录」，旧注释写错过（2026-10-31 审查轮1 两路都点了）。
 _RULES_YAML = Path(__file__).resolve().parent.parent / "rules.yaml"
 
 
 def _load_rules() -> dict:
-    """加载 rules.yaml。坏文件当空 dict（回落默认），不抛错。"""
+    """加载 rules.yaml。坏文件当空 dict（回落内置默认），不抛错但**留下日志**。
+
+    静默回落很危险：rules.yaml 语法一坏，全部规则悄悄失效、服务看起来一切正常。
+    """
+    _lg = logging.getLogger("kb.write_policy")
     try:
-        import json
         if not _RULES_YAML.exists():
+            _lg.warning("rules.yaml 不存在（%s），全部规则回落内置默认", _RULES_YAML)
             return {}
-        import yaml  # 本机有 PyYAML（kb 依赖），没有就尝试 json 兜底
+        import yaml
         data = yaml.safe_load(_RULES_YAML.read_text(encoding="utf-8")) or {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            _lg.warning("rules.yaml 顶层不是映射（%s），全部规则回落内置默认", _RULES_YAML)
+            return {}
+        return data
     except Exception:
+        _lg.warning("rules.yaml 解析失败（%s），全部规则回落内置默认", _RULES_YAML,
+                    exc_info=True)
         return {}
 
 
@@ -42,20 +54,77 @@ REQUIRED_SECTIONS = [
     if isinstance(s, str) and s
 ]
 
+def _rules_str_set(value, default):
+    """从 rules.yaml 取值构造字符串集合；类型不对就回落默认并告警。
+
+    直接 ``frozenset(yaml值)`` 有坑：若 yaml 里误写成字符串 ``"deleted, delete"``，
+    会被拆成**单字符集合**，删除后「强制刷索引」静默失效（2026-10-31 审查轮1 指出）。
+    """
+    if isinstance(value, (list, tuple)) and value and all(
+            isinstance(x, str) and x for x in value):
+        return frozenset(value)
+    if value is not None:
+        logging.getLogger("kb.write_policy").warning(
+            "rules.yaml 的 force_refresh_actions 类型不对（%s），已回落内置默认",
+            type(value).__name__)
+    return frozenset(default)
+
+
 # 写后需要 force 刷搜索的动作（删除/归档会改变可检索集合）
-FORCE_REFRESH_ACTIONS = frozenset(
-    (_RULES.get("force_refresh_actions")
-     or ["deleted", "delete", "archived", "archive", "batch_deleted", "batch_archived"])
-)
+FORCE_REFRESH_ACTIONS = _rules_str_set(
+    _RULES.get("force_refresh_actions"),
+    ["deleted", "delete", "archived", "archive", "batch_deleted", "batch_archived"])
+
+# ── 2026-10-31 新增：知识库规则反哺（第 1/2/4 条）──
+# 第 2 条「写入必带的 frontmatter 字段」：
+# 本模块**不**消费 rules.yaml 的 quality.required_fields —— 服务端在写路径上必然会
+# 生成 title/type/status（不传就是 draft），所以「写入时校验」天然无效；
+# 它真正的用武之地是**扫存量笔记**的巡查作业（尚未实现）。
+# 为免留下「定义了没人用」的死代码，这里不定义对应常量；清单仍留在 rules.yaml
+# 作规则声明，注释已标消费方待实现。
+# 兜底默认取「不改变现状」那一侧：规则键缺失时不产生新提示。
+# （rules.yaml 里现值是 false 时更是如此；用户 2026-10-31 明确「第 2 条主力交给巡查作业扫库」）
+STATUS_DEFAULT_NOTICE = bool(
+    (_RULES.get("quality") or {}).get("status_default_notice", False))
+
+# 第 1 条：总览页必须带的检索字段（缺则 warning，不硬拦）
+# 兜底为空列表 = 规则键缺失时不检查（不改变现状）；真正的清单在 rules.yaml
+OVERVIEW_REQUIRED_FIELDS = [
+    s for s in ((_RULES.get("project") or {}).get("overview_required_fields") or [])
+    if isinstance(s, str) and s
+]
+
+# 第 4 条：写笔记 → 标记「该项目总览待刷新」（增量刷新队列）
+# 兜底 false = 规则键缺失时不产生磁盘副作用；rules.yaml 里显式开了才是开
+OVERVIEW_REFRESH_ENABLED = bool(
+    (_RULES.get("project") or {}).get("overview_refresh_enabled", False))
+try:
+    OVERVIEW_REFRESH_INTERVAL_MIN = int(
+        (_RULES.get("project") or {}).get("overview_refresh_interval_min", 60))
+except (TypeError, ValueError):
+    OVERVIEW_REFRESH_INTERVAL_MIN = 60
+OVERVIEW_PENDING_FILE = str(
+    (_RULES.get("project") or {}).get("overview_pending_file") or ".kb/overview_pending.json")
+
+# 队列文件的进程内互斥。
+# waitress 是多线程（threads=8），mark_overview_pending 是 read-modify-write：
+# 不加锁会丢更新；再叠加固定临时名还会让两个 writer 互踩写出半截 JSON。
+_OVERVIEW_QUEUE_LOCK = threading.Lock()
 
 __all__ = [
     "MIN_CONTENT_LEN",
     "REQUIRED_SECTIONS",
     "FORCE_REFRESH_ACTIONS",
+    "STATUS_DEFAULT_NOTICE",
+    "OVERVIEW_REQUIRED_FIELDS",
+    "OVERVIEW_REFRESH_ENABLED",
+    "OVERVIEW_REFRESH_INTERVAL_MIN",
+    "OVERVIEW_PENDING_FILE",
     "required_sections_for",
     "validate_note_quality",
     "validate_write_hygiene",
     "on_note_changed",
+    "mark_overview_pending",
 ]
 
 
@@ -629,6 +698,96 @@ def _project_overview_warnings(
     return warnings
 
 
+def _content_has_fm_key(content: str, key: str) -> bool:
+    """content 的 **frontmatter 顶层键**里有没有 key。
+
+    不能用 ``key in content`` 子串判断：正文里出现同名字样（或代码块里写示例）就会
+    被误判成「已有该字段」，真正缺失时反而不报警（审查轮3 三路都点了这一条）。
+    """
+    txt = content or ""
+    if not txt.startswith("---"):
+        return False
+    end = txt.find("\n---", 3)
+    if end < 0:
+        return False
+    for line in txt[3:end].splitlines():
+        if not line.strip() or line[0] in " \t-#":   # 空行、续行、列表项、注释
+            continue
+        if re.match(r"^" + re.escape(key) + r"\s*:", line):
+            return True
+    return False
+
+
+def _project_overview_field_warnings(
+    note_type: str,
+    title_s: str,
+    tags=None,
+    aliases=None,
+    content: str = "",
+) -> List[dict]:
+    """写「项目总览」时检查检索字段（第 1 条，2026-10-31 新增）。
+
+    检索得分是四层乘法，后两层吃的是 frontmatter 的
+    importance / title / tags / canonical_tags / aliases。
+    实测：只写 importance、不写 tags/aliases 的总览，搜项目名进不了前 8。
+
+    检查项**由 rules.yaml 的 ``project.overview_required_fields`` 驱动**，本函数不写死
+    清单；清单里出现本函数不认识的字段名时**跳过而不误报**（避免配置与实现漂移）。
+    ``title`` 不在此列：总览的 title 必须恰好是「项目总览」才会走到这里，
+    检查它恒为真、没有意义（要搜得到项目名靠的是 tags/aliases）。
+
+    只 warning 不硬拦 —— 存量 3 份总览都缺这些字段，硬拦会让它们无法更新。
+    """
+    warnings: List[dict] = []
+    try:
+        if note_type != "project":
+            return warnings
+        stem = (title_s or "").strip()
+        if stem != _PROJECT_OVERVIEW_NAME[: -len(".md")]:
+            return warnings
+        checks = {
+            "tags": lambda: not (tags or []),
+            "aliases": lambda: not (aliases or []),
+            "importance": lambda: not _content_has_fm_key(content, "importance"),
+        }
+        known = [k for k in OVERVIEW_REQUIRED_FIELDS if k in checks]
+        missing: List[str] = [k for k in known if checks[k]()]
+        if missing:
+            warnings.append({
+                "kind": "overview_missing_retrieval_fields",
+                "missing": missing,
+                "hint": (
+                    "总览页缺 %s。检索得分是四层乘法："
+                    "rerank × 时间衰减 × (1+importance×0.5) × (1+0.25×标题/标签命中数，上限2.0)；"
+                    "实测缺这些字段的总览，搜项目名时进不了前 8。"
+                    "修复：写入时带 tags/aliases，正文 frontmatter 加 importance: 1.0。"
+                    % "、".join(missing)
+                ),
+            })
+    except Exception:
+        log.warning("write_policy.py 总览字段检查异常，已忽略", exc_info=True)
+    return warnings
+
+
+def _status_default_warning(note_type: str, status=None) -> List[dict]:
+    """payload 未显式传 status → 提示会落成 draft（第 2 条，2026-10-31 新增）。"""
+    try:
+        if not STATUS_DEFAULT_NOTICE or note_type not in ("project", "knowledge"):
+            return []
+        if (status or "").strip():
+            return []
+        return [{
+            "kind": "status_defaulted_to_draft",
+            "hint": (
+                "payload 未指定 status，本条会落成 draft。"
+                "正式的方案/结论类笔记建议显式传 status=active（或 done/archived），"
+                "否则在设置页的状态视图里会被归入草稿。"
+            ),
+        }]
+    except Exception:
+        return []
+
+
 def validate_write_hygiene(
     note_type: str,
     subdir: str,
@@ -637,6 +796,9 @@ def validate_write_hygiene(
     notes_dir: Optional[Path] = None,
     type_map: Optional[dict] = None,
     sanitize_fn: Optional[Callable[[str], str]] = None,
+    tags=None,
+    aliases=None,
+    status=None,
 ) -> Tuple[Optional[dict], List[dict]]:
     """写时卫生硬拦。返回 (error_dict|None, warnings)。
 
@@ -707,13 +869,114 @@ def validate_write_hygiene(
     warnings.extend(
         _project_overview_warnings(note_type, sd_norm, title_s, notes_dir)
     )
+    # ── 2026-10-31 新增（知识库规则反哺 · 第 1、2 条）──
+    warnings.extend(
+        _project_overview_field_warnings(note_type, title_s, tags, aliases, content_s)
+    )
+    warnings.extend(_status_default_warning(note_type, status))
     return None, warnings
+
+
+def _overview_queue_path(notes_dir):
+    """解析队列文件绝对路径，并确保它仍在 notes_dir 内（防规则配置路径逃逸）。
+
+    队列路径来自 rules.yaml 的 ``project.overview_pending_file``；
+    若该值被写成绝对路径或含 ``..``，``base / value`` 会跳出笔记根 —— 必须先校验再写。
+    返回 Path；越界或无法解析时返回 None（调用方安静跳过）。
+    """
+    try:
+        if notes_dir is None:
+            return None
+        base = Path(notes_dir).resolve()
+        qp = (base / OVERVIEW_PENDING_FILE).resolve()
+        if qp != base and base not in qp.parents:
+            log.warning("overview 队列路径越界，已跳过：%s 不在 %s 内", qp, base)
+            return None
+        return qp
+    except Exception:
+        log.warning("write_policy.py 队列路径解析异常", exc_info=True)
+        return None
+
+
+def mark_overview_pending(rel_path: str, action: str = "updated", notes_dir=None):
+    """写笔记后把所属项目加入「总览待刷新」队列（第 4 条，2026-10-31 新增）。
+
+    - 只处理 ``10-项目/<项目>/<文件>``（**至少三段**；``10-项目/x.md`` 这种直接放在
+      项目根下的文件不是项目笔记，不入队 —— 否则会把 ``x.md`` 当项目名写进队列）
+    - 总览自身不入队
+    - 队列文件 = ``<notes_dir>/.kb/overview_pending.json``（``.kb`` 不入库），
+      路径经 containment 校验，越界即跳过
+    - 并发：进程内 ``_OVERVIEW_QUEUE_LOCK`` + **唯一临时名**。
+      固定临时名会让 waitress 多线程的两个 writer 互踩，写出半截 JSON
+    - 文件损坏：**先备份成 ``.corrupt-<时间>`` 再重建**，不再静默清空（丢了能查）
+    - 任何异常只 warning，**绝不影响写入主流程**
+    - 返回入队的项目名；没入队返回 None
+    """
+    if not OVERVIEW_REFRESH_ENABLED:
+        return None
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+
+        rel = str(rel_path or "").replace("\\", "/").lstrip("/")
+        parts = [p for p in rel.split("/") if p]
+        if len(parts) < 3 or parts[0] != _PROJECT_ROOT_DIR:
+            return None
+        proj = parts[1]
+        if not proj or proj in (".", "..") or parts[-1] == _PROJECT_OVERVIEW_NAME:
+            return None
+
+        qp = _overview_queue_path(notes_dir)
+        if qp is None:
+            return None
+
+        with _OVERVIEW_QUEUE_LOCK:
+            qp.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if qp.is_file():
+                try:
+                    data = _json.loads(qp.read_text(encoding="utf-8")) or {}
+                    if not isinstance(data, dict):
+                        data = {}
+                except Exception:
+                    try:
+                        bad = qp.with_name(
+                            qp.name + ".corrupt-" + _dt.now().strftime("%Y%m%d-%H%M%S"))
+                        os.replace(qp, bad)
+                        log.warning("overview 队列文件损坏，已备份到 %s 并重建", bad)
+                    except Exception:
+                        log.warning("write_policy.py 队列损坏备份失败", exc_info=True)
+                    data = {}
+            pending = dict(data.get("pending") or {})
+            now = _dt.now().isoformat(timespec="seconds")
+            pending[proj] = {"last": now, "action": action}
+            data["pending"] = pending
+            data["interval_min"] = OVERVIEW_REFRESH_INTERVAL_MIN
+            data["updated"] = now
+            tmp = qp.with_name(f"{qp.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+            try:
+                tmp.write_text(_json.dumps(data, ensure_ascii=False, indent=1),
+                               encoding="utf-8")
+                os.replace(tmp, qp)
+            finally:
+                if tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except Exception:
+                        pass
+        return proj
+    except Exception:
+        log.warning("write_policy.py mark_overview_pending 异常，已忽略", exc_info=True)
+        return None
 
 
 def on_note_changed(
     action: str = "updated",
     force_search_refresh: bool = False,
     _hooks: Optional[Dict[str, Any]] = None,
+    *,
+    rel_path: Optional[str] = None,
+    notes_dir=None,
 ) -> None:
     """统一写后出口：缓存失效 + 索引刷新 +（可选）mark dirty。
 
@@ -753,6 +1016,14 @@ def on_note_changed(
     mark_dirty = hooks.get("mark_index_dirty")
     if callable(mark_dirty):
         mark_dirty()
+
+    # ── 第 4 条（2026-10-31）：写笔记 → 标记「该项目总览待刷新」──
+    # ⚠️ 必须放在下面的 force 早退**之前**：删除/归档/移动都在 FORCE_REFRESH_ACTIONS 里，
+    #    函数会在 force 分支直接 return，排在后面等于对这些动作永不生效（自审发现）。
+    # 只入队，不在这里刷新（刷新由 kb-pipeline watch 按设置里的间隔消费）；
+    # notes_dir 必须一并传，否则 mark_overview_pending 拿不到笔记根会**安静跳过**。
+    if rel_path:
+        mark_overview_pending(rel_path, action=action, notes_dir=notes_dir)
 
     force = bool(force_search_refresh) or action in FORCE_REFRESH_ACTIONS
     if force:

@@ -467,7 +467,14 @@ def _smart_upload_try_update(match_path, body, title, now, dedup_reason=None):
                 new_text = body.strip() + "\n"
 
             fp.write_text(new_text, encoding="utf-8")
-            write_policy.on_note_changed(action="smart_uploaded", force_search_refresh=False)
+            # 第 4 条（2026-10-31）：智能上传/更新也要标记总览待刷新
+            _rel_q = ""
+            try:
+                _rel_q = str(fp.relative_to(NOTES_DIR))
+            except ValueError:
+                pass
+            write_policy.on_note_changed(action="smart_uploaded", force_search_refresh=False,
+                                         rel_path=_rel_q or None, notes_dir=NOTES_DIR)
             return jsonify({"action": "updated", "path": str(fp.relative_to(NOTES_DIR)),
                             "match": match_path, "match_source": "llm", "title": title,
                             "version": ver, "supersedes": archived_rel, "replaced": True})
@@ -650,7 +657,14 @@ def _smart_upload_write_note(target, d, title, body, ntype, tags, defaults, dedu
     if not _first.startswith("# "):
         _body = f"# {sanitize_title(title)}\n\n" + _body
     fp.write_text(f"{fm}\n\n{_body}", encoding="utf-8")
-    write_policy.on_note_changed(action="smart_uploaded", force_search_refresh=False)
+    # 第 4 条（2026-10-31）：智能上传新建的笔记同样标记总览待刷新
+    _rel_q2 = ""
+    try:
+        _rel_q2 = str(fp.relative_to(NOTES_DIR))
+    except ValueError:
+        pass
+    write_policy.on_note_changed(action="smart_uploaded", force_search_refresh=False,
+                                 rel_path=_rel_q2 or None, notes_dir=NOTES_DIR)
     payload = {"action": "created", "path": str(fp.relative_to(NOTES_DIR)), "title": title,
                "type": ntype, "tags": tags}
     if fp.stem != safe_title:
