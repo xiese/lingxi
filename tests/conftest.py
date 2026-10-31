@@ -15,7 +15,14 @@ _TMP_ROOT = Path(tempfile.mkdtemp(prefix="kbtest-root-"))
 
 # 必须在 import kb_lib 之前设置：config 在模块导入时读取该变量
 os.environ["KB_ROOT"] = str(_TMP_ROOT)
-os.environ.setdefault("KB_HOST", "http://127.0.0.1:8899")
+# 2026-10-31 修：这里原先写的是 `os.environ.setdefault("KB_HOST", "http://127.0.0.1:8899")`。
+# KB_HOST 已被拆名（上游地址 = KB_API_BASE，绑定地址 = KB_BIND），旧名只剩兼容；
+# 而 config.py 的 `HOST = _env_with_legacy("KB_BIND", "KB_HOST", "127.0.0.1")` 会读到它，
+# 于是「绑定地址」变成带协议的 URL → path-probe 判定本机路径全部 invalid
+# （tests/test_path_probe.py 13 个红灯），并**因此挡住 CI 的发版步骤**。
+# 正确做法：按新名分别设置，且绑定地址不带协议。KB_API_BASE 的默认值本就是该 URL，
+# 无需重复设置。
+os.environ.setdefault("KB_BIND", "127.0.0.1")
 
 # 令牌表相关变量必须与宿主环境隔离。
 # 背景（2026-10-17 实测）：在导出了 KB_TOKEN 的 shell 里跑 pytest，
