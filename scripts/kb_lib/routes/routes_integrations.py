@@ -22,7 +22,7 @@ def _kb_mcp_tools_schema():
     return [
         {"type": "function", "function": {
             "name": "kb_dual_search",
-            "description": "记忆 + 知识库双重检索。回答用户问题前优先使用。",
+            "description": "记忆 + 知识库双重检索。需要查历史记录或过去的结论时使用。结果是旧记录，可能过时；用户当轮说的优先。",
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 6}}, "required": ["query"]}
         }},
         {"type": "function", "function": {

@@ -1,3 +1,24 @@
+## 1.0.18
+
+2026-11-02 发布。agent 侧话术去权威化：工具描述不再把知识库检索写成「回答前优先使用」，
+改为「可能过时、用户当轮说法优先」，并把冲突处理规则从事实边界挪到输出层。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_mcp_server.py` | `kb_dual_search` / `kb_search` 的 docstring 改为「需要查历史记录时使用，结果可能过时，用户当轮说的优先」；`kb_dual_search` 的使用建议补一条「与用户当轮说法冲突时以用户为准，并提示笔记可能需要更新」；`kb_ask` 提示词补「用户当轮说法与笔记不同时以用户说法为准并指出差异」 |
+| `scripts/kb_lib/routes/routes_integrations.py` | `kb_dual_search` 的 description 同步去权威化，标注「可能过时」 |
+| `scripts/kb_lib/prompts/system.md` | 删掉「一、事实来源」之前的「优先级」总述（该位置管事实边界，容易被读成用户说法也算库内事实）；在末尾新增「四、输出层：冲突处理」，写明与笔记冲突时按用户说法回答并指出不一致的笔记（路径 + 日期） |
+| `scripts/kb_lib/config.py` | VERSION 1.0.17 → 1.0.18 |
+| `tests/test_kb_wording.py` | 新增：断言两个 MCP 工具 docstring 与路由 description 均含「可能过时」、全仓无「回答用户问题前优先使用」、system.md 含冲突处理措辞 |
+
+### 验证
+
+- 新增 `tests/test_kb_wording.py` 全绿；临时去掉 `kb_dual_search` docstring 的「可能过时」后该用例变红，恢复后转绿。
+- `python3 -m py_compile` 通过改动过的 .py；`pytest tests/ -q --ignore=tests/js` 通过（`test_path_probe.py` 因缺 sklearn 仍为既有红灯，与本批无关）。
+- `scripts/ci/guard.py paths / content / authors` 通过。
+
 ## 1.0.17
 
 2026-10-31 发布。三路异构模型审查（本分支 10 个提交 + 当时的工作区改动）后的加固，共 16 项。

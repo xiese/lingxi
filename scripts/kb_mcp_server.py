@@ -732,20 +732,20 @@ def memory_search(query: str, limit: int = 6) -> str:
 
 @mcp.tool()
 def kb_dual_search(query: str, limit: int = 6) -> str:
-    """记忆 + 知识库双重检索。回答用户问题前优先使用：先看长期记忆，再看结构化知识库。"""
+    """记忆 + 知识库双重检索。需要查历史记录或过去的结论时使用。结果是旧记录，可能过时；用户当轮说的优先。"""
     mem_rows = memory_search_raw(query, limit)
     q = urllib.parse.quote(query)
     kb_res = api("GET", f"/api/search/semantic?q={q}&limit={max(1, min(int(limit), 20))}")
     if kb_res.get("count", 0) == 0:
         kb_res = api("GET", f"/search?q={q}&limit={max(1, min(int(limit), 20))}")
     log_usage("kb_dual_search", ok="error" not in kb_res, query=query, memory_count=len(mem_rows), kb_count=kb_res.get("count"))
-    parts = ["# 双重检索结果", "", "## A. 长期记忆 / 用户偏好", "", format_memory_markdown(query, mem_rows), "", "## B. 知识库笔记", "", format_search_markdown(kb_res, query), "", "## 使用建议", "- 偏好、习惯、长期事实优先参考“长期记忆”。", "- 项目细节、代码记录、研究资料优先参考“知识库笔记”。", "- 如果知识库命中具体路径，需要细节时继续调用 `kb_read(path)`。"]
+    parts = ["# 双重检索结果", "", "## A. 长期记忆 / 用户偏好", "", format_memory_markdown(query, mem_rows), "", "## B. 知识库笔记", "", format_search_markdown(kb_res, query), "", "## 使用建议", "- 偏好、习惯、长期事实优先参考“长期记忆”。", "- 项目细节、代码记录、研究资料优先参考“知识库笔记”。", "- 如果知识库命中具体路径，需要细节时继续调用 `kb_read(path)`。", "- 以上是历史记录，可能已过时；与用户当轮说法冲突时以用户为准，并提示用户这条笔记可能需要更新。"]
     return "\n".join(parts)
 
 
 @mcp.tool()
 def kb_search(query: str, limit: int = 8, mode: str = "semantic") -> str:
-    """搜索用户的个人知识库。用户问技术、项目、笔记、历史记录时优先调用。"""
+    """搜索用户的个人知识库。用户让查、或需要笔记里的具体事实时调用。结果可能过时；用户当轮说的优先。"""
     limit = max(1, min(int(limit), 20))
     q = urllib.parse.quote(query)
     if mode == "keyword":
@@ -1450,6 +1450,7 @@ def kb_ask(question: str) -> str:
     """基于知识库进行问答。需要综合多篇笔记时调用。
 
     服务端提示词已约束：只用库内事实、路径必须真实、冲突时标日期取新、
+    用户当轮说法与笔记不同时以用户说法为准并指出差异、
     区分实测与推测、无答案直接说没有、遇到「本文只做指针」要指向主文。
 
     注意：它只能读索引里的笔记，读不到项目代码仓里的主文（$KB_ROOT/<项目>/docs/）。
