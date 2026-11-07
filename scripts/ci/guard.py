@@ -32,7 +32,7 @@ ALLOWED_TOP = {
 # docs/ 只放通用文档；带日期的开发记录写进知识库笔记，不进代码仓。
 ALLOWED_DOCS = {
     "API.md", "ARCHITECTURE.md", "CLI.md", "CONFIGURATION.md", "DEVELOPMENT.md",
-    "INSTALL.md", "MCP.md", "TROUBLESHOOTING.md", "UPGRADE.md",
+    "INSTALL.md", "INDEXING.md", "MCP.md", "TROUBLESHOOTING.md", "UPGRADE.md",
 }
 BANNED_NAME = re.compile(
     r"(^|/)(\.api_tokens\.json|\.kb_settings\.json|\.audit\.db.*|\.audit_log\.jsonl.*|"
