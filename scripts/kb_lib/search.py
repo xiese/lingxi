@@ -1503,7 +1503,8 @@ class SearchIndex:
                 return
             # 保存嵌入增量更新需要的 old_paths（self.paths 即将被更新）
             old_paths_for_embed = list(self.paths)
-            # 快照：嵌入失败时回滚，避免"新 paths + 旧向量"写坏索引
+            # 快照：文本侧异常时回滚，避免半写状态。嵌入失败不再走这里——
+            # 2026-11-07 起嵌入只降级向量面、不回滚 paths/BM25。
             _snap = (
                 list(self.paths or []), list(self.contents or []), dict(self.mtimes or {}),
                 self.bm25, self.embeddings, self.faiss_index, self._index_version,
@@ -1573,8 +1574,8 @@ class SearchIndex:
 
         调用方负责加锁；本方法不自行获取 self.lock，以保持与原内联实现
         完全相同的锁范围（embedding_api 调用期间锁必须保持持有，理由见
-        incremental_refresh 中的注释）。嵌入后强制校验对齐，未对齐即抛错，
-        由调用方回滚到刷新前快照。
+        incremental_refresh 中的注释）。文本索引先落盘；嵌入未对齐只降级
+        向量面（embeddings/faiss 置空后落盘），不再抛错回滚文本索引。
         """
         self.bm25 = BM25Okapi(tokenized)
         self.paths = merged_paths
@@ -1589,12 +1590,25 @@ class SearchIndex:
         self._token_sets = None    # 失效分词集合缓存
         self._save_index()  # 在锁内持久化，避免 search 线程读到不一致状态
         if get_setting("embedding_type") == "llm":
-            self.build_embeddings_incremental(
-                changed_paths, changed_contents, removed, old_paths
-            )
-            # 嵌入即使被内部吞掉异常，也必须确认已对齐；否则回滚
+            # 文本索引（paths/BM25）与向量嵌入是两件事：文本部分此刻已经落盘
+            # 成功，嵌入只是可降级的外围能力。嵌入失败时只禁用向量面，绝不
+            # 连文本索引一起回滚（否则上游一挂，新笔记永远进不了索引）。
+            try:
+                self.build_embeddings_incremental(
+                    changed_paths, changed_contents, removed, old_paths
+                )
+            except Exception:
+                log.warning("增量嵌入抛错，仅降级向量面，保留本次文本索引", exc_info=True)
             if not self._incremental_embeddings_aligned():
-                raise RuntimeError("增量嵌入未成功（embeddings 与 paths 未对齐），回滚本次刷新")
+                # 向量面不可用：置空 embeddings/faiss 并落盘，vector_search_ready
+                # 随之变 False（检索退回 BM25），本次 paths/BM25 结果保持不变。
+                log.warning(
+                    "增量嵌入未成功（embeddings 与 paths 未对齐），仅降级向量面："
+                    "paths/BM25 已落盘、不回滚；vector_search_ready=False"
+                )
+                self.embeddings = None
+                self.faiss_index = None
+                self._save_index()
 
     def _incremental_embeddings_aligned(self):
         """embeddings 与 paths 行数是否对齐；访问异常按未对齐处理。"""

@@ -1,7 +1,9 @@
 ## 1.0.18
 
-2026-11-02 发布。agent 侧话术去权威化：工具描述不再把知识库检索写成「回答前优先使用」，
-改为「可能过时、用户当轮说法优先」，并把冲突处理规则从事实边界挪到输出层。
+2026-11-07 发布。两项改动：**话术去权威化**——工具描述不再把知识库检索写成
+「回答前优先使用」，改为「可能过时、用户当轮说法优先」，并把冲突处理规则从
+事实边界挪到输出层；**增量刷新嵌入降级**——上游嵌入服务不可用时不再回滚已经
+落盘的文本索引（原先新笔记会因此永远进不了索引）。
 
 ### 改动
 
@@ -13,11 +15,28 @@
 | `scripts/kb_lib/config.py` | VERSION 1.0.17 → 1.0.18 |
 | `tests/test_kb_wording.py` | 新增：断言两个 MCP 工具 docstring 与路由 description 均含「可能过时」、全仓无「回答用户问题前优先使用」、system.md 含冲突处理措辞 |
 
+### 修复：增量刷新嵌入失败只降级向量面
+
+上游嵌入服务返回 429/5xx 时，`incremental_refresh()` 原先会把已经算好并落盘的
+文本索引（paths/BM25）连同向量面一起回滚，于是新写的笔记永远进不了持久化索引
+（生产实测一天内 188 次增量刷新全部回滚）。现把「文本索引」与「向量嵌入」解耦。
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_lib/search.py` | `_apply_incremental_docs_locked()`：文本索引照常落盘；嵌入调用包 `try/except`，未对齐时只把 `embeddings`/`faiss_index` 置空并落盘（向量面不可用、检索退回 BM25），不再抛错触发 `incremental_refresh()` 的快照回滚 |
+| `tests/test_incremental_refresh_embed_degrade.py` | 新增三条用例：嵌入抛 429 时 paths/BM25 仍更新并落盘、嵌入组装自身抛错时兜底、嵌入正常时行为不变 |
+
 ### 验证
 
+- 新增 `tests/test_incremental_refresh_embed_degrade.py` 三条用例全绿。
+- 离线 A/B（临时 `KB_ROOT` + 样本笔记 + 桩掉 `embedding_api`）：改前嵌入抛 429 时刷新抛错回滚、
+  索引文件 grep 不到新笔记；改后不抛错、新笔记路径落进持久化索引、`vector_search_ready=False`、
+  `state=clean`；嵌入正常时两条路径行为一致。
 - 新增 `tests/test_kb_wording.py` 全绿；临时去掉 `kb_dual_search` docstring 的「可能过时」后该用例变红，恢复后转绿。
 - `python3 -m py_compile` 通过改动过的 .py；`pytest tests/ -q --ignore=tests/js` 通过（`test_path_probe.py` 因缺 sklearn 仍为既有红灯，与本批无关）。
 - `scripts/ci/guard.py paths / content / authors` 通过。
+- 离线 A/B 的逐条证据、上线步骤与回滚办法见
+  `docs/TROUBLESHOOTING.md`「增量刷新遇到嵌入失败，新笔记进不了索引」。
 
 ## 1.0.17
 
