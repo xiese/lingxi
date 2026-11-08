@@ -183,7 +183,10 @@ mark.hl{background:#fef08a;color:#854d0e;padding:1px 3px;border-radius:2px;font-
 .wl-cand-p{font-size:11px;color:#9ca3af;margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%}
 /* ![[笔记]] 内嵌渲染 */
 .wl-embed{margin:10px 0;border:1px solid var(--input-border,#e5e7eb);border-left:3px solid var(--blue,#2563eb);border-radius:8px;background:var(--hover,#fafafa)}
-.wl-embed-head{font-size:12px;color:#6b7280;padding:6px 10px;border-bottom:1px dashed var(--input-border,#e5e7eb);cursor:pointer}
+.wl-embed-head{display:flex;align-items:center;gap:8px;font-size:12px;color:#6b7280;padding:6px 10px;border-bottom:1px dashed var(--input-border,#e5e7eb)}
+.wl-embed-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wl-embed-refresh{border:0;background:transparent;color:#6b7280;cursor:pointer;font-size:13px;line-height:1;padding:2px 5px;border-radius:4px}
+.wl-embed-refresh:hover{background:var(--input-border,#e5e7eb);color:var(--text)}
 .wl-embed-body{padding:8px 12px}
 .wl-embed-loading,.wl-embed-missing{font-size:12px;color:#9ca3af}
 /* 第 5 项：正文绝对路径徽标。三种状态必须一眼能分开——

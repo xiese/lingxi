@@ -737,7 +737,7 @@ var _ntItems=null;
 // 写入笔记后失效缓存：下一次切页签/点标签时会重新拉取全量（与改动前行为一致——原实现保存后也不主动刷树）
 function ltInvalidate(){_ntItems=null}
 function ltFilter(){if(!_ntItems){lt();return}renderTree(_ntItems,document.getElementById('noteFilter')?.value||'')}
-function lt(){var box=document.getElementById('nt');ap('/api/notes/tree').then(d=>{if(d.error||!Array.isArray(d.items)){throw new Error(d.error||'目录数据异常')}_ntItems=d.items;renderTree(_ntItems,document.getElementById('noteFilter')?.value||'')}).catch(e=>{_ntItems=null;if(box)box.innerHTML='<p class="text-red-500 text-xs py-4 text-center cursor-pointer" onclick="lt()">目录加载失败，点此重试</p>'})}
+function lt(){var box=document.getElementById('nt');return ap('/api/notes/tree').then(d=>{if(d.error||!Array.isArray(d.items)){throw new Error(d.error||'目录数据异常')}_ntItems=d.items;renderTree(_ntItems,document.getElementById('noteFilter')?.value||'');return _ntItems}).catch(e=>{_ntItems=null;if(box)box.innerHTML='<p class="text-red-500 text-xs py-4 text-center cursor-pointer" onclick="lt()">目录加载失败，点此重试</p>';return null})}
 function renderTree(items,filterRaw){var filter=(filterRaw||'').toLowerCase();_ntLazy={};const tree={};(items||[]).forEach(i=>{if(filter&&!(i.title||'').toLowerCase().includes(filter)&&!(i.path||'').toLowerCase().includes(filter))return;var fn=String(i.path||'').split('/').pop();if(fn.startsWith('{{')||fn.startsWith('.'))return;const p=String(i.path||'').split('/');let n=tree;p.forEach((x,j)=>{if(j==p.length-1){n._f=n._f||[];n._f.push(i)}else{n[x]=n[x]||{};n=n[x]}})});var projects={},notes={};for(var k in tree){if(k=='10-项目')projects[k]=tree[k];else if(k!='_f')notes[k]=tree[k];else{notes._f=notes._f||[];notes._f=notes._f.concat(tree[k])}}var h='';var nc=Object.keys(notes).length||(notes._f?.length||0);var pc=Object.keys(projects).length||(projects._f?.length||0);if(!filter&&(nc||pc)){if(nc)h+='<div class="text-xs font-semibold text-gray-400 mt-2 mb-1">📚 知识笔记</div>'+rT(notes,0,null,!!filter);if(pc)h+='<div class="text-xs font-semibold text-gray-400 mt-3 mb-1 border-t border-gray-200 pt-2">📁 项目</div>'+rT(projects,0,true,!!filter)}else{h=rT(tree,0,null,true)}document.getElementById('nt').innerHTML=h||'<p class="text-gray-400 text-xs py-4 text-center">无内容</p>'}
 // 笔记树折叠：深层目录默认折叠，nt-body 用 hidden class 控制显隐，展开时才按需渲染子树
 var _ntLazy={},_ntLazyId=0;
@@ -768,7 +768,7 @@ closeMobilePanels();}
 function nrl(p){document.getElementById('nrel').innerHTML='<p class="text-xs text-gray-400">加载中...</p>';ap('/api/notes/'+encodeURIComponent(p)+'/related').then(d=>{var r=d.related||[],fs=x=>{var s=Number(x.display_score??x.score??0);if(!isFinite(s))s=0;s=Math.max(0,Math.min(1,s));return (s*100).toFixed(0)+'%'};document.getElementById('nrel').innerHTML=r.length?('<h4 class="text-sm font-semibold text-gray-500 mb-2">📎 相关内容 ('+r.length+'篇)</h4>'+r.map(x=>`<div class="card p-3 mb-2 cursor-pointer hover:border-blue-300 transition" onclick="st('notes');setTimeout(()=>rn('${jss(x.path)}'),200)"><span class="font-medium text-sm text-gray-800">${esc(x.title||String(x.path||'').split('/').pop())}</span><span class="text-xs text-blue-500 ml-2" title="原始分数: ${esc(x.score??'')}">${fs(x)}</span><div class="text-xs text-gray-400">${esc(x.path)}</div></div>`).join('')):'<p class="text-xs text-gray-400">无相关内容</p>'}).catch(()=>{document.getElementById('nrel').innerHTML='<p class="text-xs text-gray-400">加载失败</p>'})}
 function nq(p){ap('/api/llm/quality',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})}).then(d=>{var q=d.quality||{},score=q.score||0,c=score>=80?'emerald':score>=60?'blue':score>=40?'amber':'red';var h='<div class="mt-2 p-3 rounded-lg border border-'+c+'-200 bg-'+c+'-50"><div class="flex items-center gap-2"><span class="text-2xl font-bold text-'+c+'-600">'+score+'</span><span class="text-xs text-gray-500">/100</span></div>';if(q.strengths?.length)h+='<div class="text-xs text-emerald-600 mt-1">✓ '+esc(q.strengths.slice(0,2).join(', '))+'</div>';if(q.improvements?.length)h+='<div class="text-xs text-amber-600 mt-1">→ '+esc(q.improvements.slice(0,2).join(', '))+'</div>';h+='</div>';document.getElementById('nv').insertAdjacentHTML('beforeend',h)}).catch(()=>{toast.show('评估失败','error')})}
 // ─── 笔记编辑 K1 ───
-function ne(p){var vc=document.getElementById('noteViewContent'),ea=document.getElementById('noteEditArea');vc.classList.add('hidden');ea.classList.remove('hidden');ap('/notes/'+encodeURIComponent(p)).then(d=>{if(d.error){toast.show(d.error,'error');return}ea.innerHTML='<textarea id="editTextarea" class="edit-textarea">'+d.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')+'</textarea><div class="edit-toolbar mt-3"><button onclick="ns(\''+jss(p)+'\')" id="saveBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition">💾 保存</button><button onclick="document.getElementById(\'noteViewContent\').classList.remove(\'hidden\');document.getElementById(\'noteEditArea\').classList.add(\'hidden\')" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded text-sm transition" style="background:var(--hover);color:var(--text2)">取消</button><span class="text-xs text-gray-400 ml-2">Ctrl+S 快捷保存</span></div>';var ta=document.getElementById('editTextarea');ta.focus();ta.addEventListener('keydown',function(e){if(e.ctrlKey&&e.key==='s'){e.preventDefault();ns(p)}});wlBindComplete(ta)}).catch(e=>{toast.show('加载失败','error');vc.classList.remove('hidden');ea.classList.add('hidden')})}
+function ne(p){var vc=document.getElementById('noteViewContent'),ea=document.getElementById('noteEditArea');vc.classList.add('hidden');ea.classList.remove('hidden');ap('/notes/'+encodeURIComponent(p)).then(d=>{if(d.error){toast.show(d.error,'error');return}ea.innerHTML='<textarea id="editTextarea" class="edit-textarea">'+d.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')+'</textarea><div class="edit-toolbar mt-3"><button onclick="ns(\''+jss(p)+'\')" id="saveBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition">💾 保存</button><button onclick="document.getElementById(\'noteViewContent\').classList.remove(\'hidden\');document.getElementById(\'noteEditArea\').classList.add(\'hidden\')" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded text-sm transition" style="background:var(--hover);color:var(--text2)">取消</button><span class="text-xs text-gray-400 ml-2">Ctrl+S 快捷保存</span></div>';var ta=document.getElementById('editTextarea');ta.focus();ta.addEventListener('keydown',function(e){if(e.ctrlKey&&e.key==='s'){e.preventDefault();ns(p)}});if(!_ntItems)lt();wlBindComplete(ta)}).catch(e=>{toast.show('加载失败','error');vc.classList.remove('hidden');ea.classList.add('hidden')})}
 function ns(p){var btn=document.getElementById('saveBtn'),ct=document.getElementById('editTextarea').value;if(btn)btn.disabled=true;ap('/notes/'+encodeURIComponent(p),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:ct})}).then(d=>{if(d.error){toast.show(d.error,'error');if(btn)btn.disabled=false;return}toast.show('✅ 已保存','success');document.getElementById('noteViewContent').classList.remove('hidden');document.getElementById('noteEditArea').classList.add('hidden');ltInvalidate();rn(p)}).catch(e=>{toast.show('保存失败','error');if(btn)btn.disabled=false})}
 // ─── 笔记下载 K2 ───
 function nd(p){ap('/notes/'+encodeURIComponent(p)).then(d=>{if(d.error){toast.show(d.error,'error');return}var fn=(p.split('/').pop()||'note');if(!fn.endsWith('.md'))fn+='.md';var blob=new Blob([d.content||''],{type:'text/markdown;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fn;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);toast.show('📥 下载完成','success')}).catch(e=>{toast.show('下载失败','error')})}
@@ -899,7 +899,8 @@ function m2(md,opts){
   for(var k=0;k<embeds.length;k++){
     html=html.split('␟EM'+k+'␟').join(
       '<div class="wl-embed" data-wl-embed="'+escapeHtml(embeds[k])+'">'+
-      '<div class="wl-embed-head">📄 '+escapeHtml(embeds[k])+'</div>'+
+      '<div class="wl-embed-head"><span class="wl-embed-name">📄 '+escapeHtml(embeds[k])+'</span>'+
+      '<button type="button" class="wl-embed-refresh" title="重新加载这篇" onclick="wlEmbedRefresh(this);return false">↻</button></div>'+
       '<div class="wl-embed-body"><span class="wl-embed-loading">加载中…</span></div></div>');
   }
   // 5. Post-process: local file links → authenticated download handler
@@ -1069,10 +1070,15 @@ function wlBindComplete(ta){
       n.onclick=function(){var i=Number(n.getAttribute('data-i')||0);wlInsert(ta,ctx,cur[i]);ctx=null;cur=[];wlCompleteHide()};
     });
   }
+  var prefetch=null;   // 目录树未加载时的预取，避免每次按键都发一次请求
   function refresh(){
     ctx=wlCompleteContext(ta.value,ta.selectionStart);
     if(!ctx)return wlCompleteHide();
-    if(!_ntItems){lt();return wlCompleteHide()}   // 目录树还没加载：先拉一次，下一击字就有了
+    if(!_ntItems){
+      var p=prefetch||(prefetch=lt()||Promise.resolve());
+      p.then(function(){ if(!_ntItems){prefetch=null;return} prefetch=null; refresh(); });
+      return wlCompleteHide();
+    }
     cur=wlCandidates(_ntItems,ctx.query,20);sel=0;render();
   }
   ta.addEventListener('input',refresh);
@@ -1157,16 +1163,48 @@ function embedWikilinksIn(container,from){
       }
       if(!p)return miss('目标不存在：'+escapeHtml(t));
       if(p===cur)return miss('（跳过自引用）');
-      jobs.push(ap('/notes/'+encodeURIComponent(p)).then(function(nd){
-        if(!nd||nd.error||typeof nd.content!=='string')return miss('加载失败');
-        if(body)body.innerHTML=m2(nd.content,{embed:false});
-      }).catch(function(){miss('加载失败')}));
+      el.classList.remove('wl-broken');
+      jobs.push(wlFillEmbedResolved(el,p));
     })(nodes[i]);
     return Promise.all(jobs).then(function(){
       // 嵌入正文里也有双链，一并标断链（m2 已给它们 data-wl）
       return resolveLinksIn(container,cur);
     });
   }).catch(function(){return 0});
+}
+
+/** 把一篇笔记的正文渲染进嵌入块（首次填充与「↻ 重新加载」共用）。 */
+function wlFillEmbedResolved(el,p){
+  var body=el?el.querySelector('.wl-embed-body'):null;
+  if(!body)return Promise.resolve();
+  return ap('/notes/'+encodeURIComponent(p)).then(function(nd){
+    if(!nd||nd.error||typeof nd.content!=='string'){
+      body.innerHTML='<span class="wl-embed-missing">加载失败</span>';return;
+    }
+    body.innerHTML=m2(nd.content,{embed:false});
+  }).catch(function(){body.innerHTML='<span class="wl-embed-missing">加载失败</span>'});
+}
+
+/**
+ * 嵌入块标题行的「↻」：重解析 + 重拉这一篇。
+ * 页面开着时目标笔记被改了，点一下就能看到最新；只刷这一块，不动同页其它嵌入。
+ */
+function wlEmbedRefresh(btn){
+  var el=btn&&btn.closest?btn.closest('.wl-embed'):null;
+  if(!el)return;
+  var body=el.querySelector('.wl-embed-body'),t=el.getAttribute('data-wl-embed');
+  if(!t||!body)return;
+  var cur=currentEditPath||'';
+  body.innerHTML='<span class="wl-embed-loading">加载中…</span>';
+  return ap('/api/links/resolve-batch',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({from:cur,targets:[t]})})
+  .then(function(d){
+    var p=((d&&d.resolved)||{})[t];
+    if(!p){el.classList.add('wl-broken');body.innerHTML='<span class="wl-embed-missing">目标不存在：'+escapeHtml(t)+'</span>';return}
+    if(p===cur){body.innerHTML='<span class="wl-embed-missing">（跳过自引用）</span>';return}
+    el.classList.remove('wl-broken');
+    return wlFillEmbedResolved(el,p);
+  }).catch(function(){body.innerHTML='<span class="wl-embed-missing">加载失败</span>'});
 }
 
 /**

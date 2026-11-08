@@ -19,7 +19,7 @@
 | 文件 | 内容 |
 |---|---|
 | `scripts/kb_lib/routes/routes_notes.py` | `_rewrite_links_to()` 新增 `dry_run` 参数（只清点、不落盘、不入 undo）；`_move_one()` 的 `dry_run` 分支据此回报 `links_updated` 预演清单 |
-| `scripts/web/app.js` | ① `m2(md, opts)` 支持 `opts.embed`（默认开）并识别 `![[x]]` → `.wl-embed` 占位；新增 `embedWikilinksIn()` 在阅读页异步拉正文填入（只展开一层） ② 新增 `wlCompleteContext / wlCandidates / wlInsert / wlBindComplete` 一组输入补全 ③ 新增 `nm()` 与阅读页「📁 移动」按钮 ④ `rn()` 的断链分支改走 `wlMissing()`（确认后就地新建） |
+| `scripts/web/app.js` | ① `m2(md, opts)` 支持 `opts.embed`（默认开）并识别 `![[x]]` → `.wl-embed` 占位；新增 `embedWikilinksIn()` 在阅读页异步拉正文填入（只展开一层） ② 新增 `wlCompleteContext / wlCandidates / wlInsert / wlBindComplete` 一组输入补全 ③ 新增 `nm()` 与阅读页「📁 移动」按钮 ④ `rn()` 的断链分支改走 `wlMissing()`（确认后就地新建） ⑤ `lt()` 改为返回 promise；打开编辑器时预取目录树，补全在未加载时预取一次后再弹候选 ⑥ 新增 `wlFillEmbedResolved()` / `wlEmbedRefresh()`：嵌入块标题行加「↻ 重新加载」 |
 | `scripts/web/index.html` | 新增 `.wl-complete / .wl-cand*`（候选浮层）与 `.wl-embed*`（内嵌块）样式 |
 | `scripts/kb_lib/search.py` | 删除 `_migrate_legacy_pickle()` 与 `_legacy_index_path()`；`_load_index_file()` 只认新格式，读取失败直接全量重建 |
 | `scripts/kb_lib/config.py` | 旧格式注释同步；VERSION 1.0.18 → 1.0.19 |
@@ -44,7 +44,8 @@
 
 ### 验证
 
-- `node --test tests/js/*.test.cjs` → **63 passed**（含新增 5 条）。
+- `node --test tests/js/*.test.cjs` → **65 passed**（含新增 7 条：补全上下文 / 候选排序 / 插入、m2 嵌入占位、嵌入异步填入、
+  嵌入块「↻」刷新、目录树预取）。
 - `python3 -m pytest tests/ -q --ignore=tests/js` → **732 passed / 13 failed / 2 skipped**；
   13 个失败全部为既有的 `test_path_probe.py`（环境缺 sklearn），与改动前基线逐条一致。
 - `python3 scripts/ci/guard.py all` 通过。
@@ -61,8 +62,8 @@
 
 ### 后续注意
 
-- 补全依赖目录树已加载（`_ntItems`）；未加载时会先异步拉一次，**当次不弹候选**，再输入一个字才生效。
-- `![[x]]` 渲染成只读引用块，不是带编辑能力的 transclusion；目标笔记改了不会自动刷新当前页。
+- 补全在目录树未加载时会自动预取（只发一次，不随按键重复请求），拿到后当次即弹候选；打开编辑器时也会顺手预取一次。
+- `![[x]]` 是只读引用块（不是带编辑能力的 transclusion）；目标笔记后来被改了，点块标题行的「↻」即重新加载这一块。
 - 本版目前只在开发库；生产实例仍为 1.0.18，部署需单独授权。
 
 ## 1.0.18

@@ -37,7 +37,7 @@ function mkEmbed(t){
            _body:body };
 }
 var document = {
-  getElementById: function(){ return { innerHTML:'', classList:{add:function(){},remove:function(){},contains:function(){return false}} }; },
+  getElementById: function(){ return { innerHTML:'', style:{}, classList:{add:function(){},remove:function(){},contains:function(){return false}}, querySelectorAll:function(){return []} }; },
   createElement: function(){ return { style:{}, classList:{add:function(){},remove:function(){}} }; },
   addEventListener: function(){}, querySelectorAll: function(){ return []; }, querySelector: function(){ return null; },
   body:{appendChild:function(){},removeChild:function(){}}
@@ -141,6 +141,7 @@ test('m2：![[x]] 生成嵌入占位，代码段内不动，embed:false 退化�
   })`, ctx);
   const d = JSON.parse(res);
   assert.ok(d.on.includes('data-wl-embed="甲笔记"'), '正文里的 ![[x]] 应生成嵌入占位：' + d.on.slice(0, 200));
+  assert.ok(d.on.includes('wl-embed-refresh'), '嵌入块标题行要带「↻ 重新加载」按钮');
   assert.ok(d.on.includes('![[示例甲]]'), '行内代码里的示例不该被处理');
   assert.ok(d.on.includes('![[示例乙]]'), '代码块里的示例不该被处理');
   assert.ok(!d.off.includes('data-wl-embed'), 'embed:false 时不再生成嵌入');
@@ -167,4 +168,52 @@ test('embedWikilinksIn：填入正文 / 断链标红 / 自引用跳过', async (
   assert.ok(res.goodHtml.includes('正文甲'), '嵌入正文应被渲染填入：' + res.goodHtml.slice(0, 120));
   assert.strictEqual(res.badBroken, true, '解析不到的嵌入应标断链');
   assert.ok(res.selfHtml.includes('自引用'), '自引用不发请求，就地提示');
+});
+
+// ── ⑥ 嵌入块「↻ 重新加载」 ──
+
+test('wlEmbedRefresh：重解析 + 重拉这一篇，只刷这一块', async () => {
+  const ctx = makeSandbox();
+  const res = await run(ctx, `
+    A='http://127.0.0.1:18900'; T='tok';
+    var el=mkEmbed('甲'), other=mkEmbed('乙');
+    other._body.innerHTML='不该被动的块';
+    __resp['http://127.0.0.1:18900/api/links/resolve-batch']={resolved:{'甲':'20-知识/甲.md'}};
+    __resp['http://127.0.0.1:18900/notes/'+encodeURIComponent('20-知识/甲.md')]={content:'最新正文'};
+    currentEditPath='20-知识/引用者.md';
+    var btn={ closest:function(s){ return s==='.wl-embed'?el:null } };
+    var before=__requests.length;
+    await wlEmbedRefresh(btn);
+    return { html:el._body.innerHTML, reqs:__requests.length-before, other:other._body.innerHTML };
+  `);
+  assert.ok(res.html.includes('最新正文'), '刷新后应换成最新正文：' + res.html.slice(0, 120));
+  assert.strictEqual(res.reqs, 2, '一次重解析 + 一次重拉正文');
+  assert.strictEqual(res.other, '不该被动的块', '只刷被点的那一块');
+});
+
+// ── ⑦ 目录树未加载时的预取（每条一条，不是每次按键都发） ──
+
+test('补全：目录树未加载时预取一次，拿到后自动弹候选', async () => {
+  const ctx = makeSandbox();
+  const res = await run(ctx, `
+    var calls=0;
+    var realLt=lt;
+    lt=function(){ calls++; _ntItems=[{path:'20-知识/甲.md',title:'甲'}]; return Promise.resolve(_ntItems); };
+    var handlers={};
+    var ta={ value:'[[', selectionStart:2,
+             getBoundingClientRect:function(){return {left:0,top:0,bottom:0,width:100}},
+             focus:function(){}, setSelectionRange:function(){},
+             addEventListener:function(k,f){(handlers[k]=handlers[k]||[]).push(f)} };
+    wlBindComplete(ta);
+    _ntItems=null;
+    handlers['input'][0]();      // 第一次输入：触发预取
+    await flush(30);
+    var afterFirst=calls;
+    handlers['input'][0]();      // 第二次输入：已有数据，不该再拉
+    await flush(30);
+    lt=realLt;
+    return { afterFirst:afterFirst, total:calls };
+  `);
+  assert.strictEqual(res.afterFirst, 1, '未加载时应预取一次');
+  assert.strictEqual(res.total, 1, '拿到目录树后不该再重复拉取');
 });
