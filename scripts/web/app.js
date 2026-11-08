@@ -743,11 +743,13 @@ function renderTree(items,filterRaw){var filter=(filterRaw||'').toLowerCase();_n
 var _ntLazy={},_ntLazyId=0;
 function ntToggle(el){var b=el.nextElementSibling;if(!b||!b.classList.contains('nt-body'))return;var op=b.classList.toggle('hidden')===false;var ar=el.querySelector('.nt-ar');if(ar)ar.textContent=op?'▾':'▸';if(op){var lz=b.getAttribute('data-lz');if(lz&&_ntLazy[lz]){b.innerHTML=rT(_ntLazy[lz].n,_ntLazy[lz].d,_ntLazy[lz].ht,_ntLazy[lz].fe);b.removeAttribute('data-lz');delete _ntLazy[lz]}}}
 function rT(n,d,ht,fe){let h='';for(let[k,v]of Object.entries(n)){if(k=='_f'){v.forEach(f=>{var fp=String(f.path||''),ft=String(f.title||fp.split('/').pop().slice(0,20));h+=`<div class="py-1 hover:bg-gray-100 rounded px-2 text-sm text-gray-700 flex items-center gap-1"><input type="checkbox" class="batch-check" data-bp="${esc(fp)}" onclick="event.stopPropagation();bcToggle('${jss(fp)}')" ${batchSet.has(f.path)?'checked':''}><span class="cursor-pointer flex-1" onclick="rn('${jss(fp)}')">${f.type=='project'?'📁':f.type=='diary'?'📅':'📄'} ${esc(ft)}</span></div>`})}else if(ht&&d==0){h+=rT(v,d+1,ht,fe)}else{var op=(d==0||!!fe),lz='';if(!op){_ntLazy[++_ntLazyId]={n:v,d:d+1,ht:ht,fe:!!fe};lz=' data-lz="'+_ntLazyId+'"'}h+='<div class="nt-hd py-1 text-gray-400 text-xs font-medium mt-1 cursor-pointer hover:bg-gray-100 rounded px-2" onclick="ntToggle(this)"><span class="nt-ar">'+(op?'▾':'▸')+'</span> 📂 '+esc(k.replace(/^\d+-/,''))+'</div><div class="nt-body'+(op?'':' hidden')+'"'+lz+'>'+(op?rT(v,d+1,ht,fe):'')+'</div>'}}return h}
-function rn(p,wl){if(wl){ap('/api/links/resolve?target='+encodeURIComponent(p)+(currentEditPath?'&from='+encodeURIComponent(currentEditPath):'')).then(d=>{if(d&&d.resolved)rn(d.resolved);else toast.show('双链目标不存在：'+p,'error')}).catch(()=>toast.show('双链解析失败','error'));return}var pp=p;if(!p.includes('.'))pp=p+'.md';ap('/notes/'+encodeURIComponent(pp)).then(d=>{if(d.error&&!p.includes('.')){ap('/notes/'+encodeURIComponent(p)).then(d2=>sn(d2)).catch(()=>toast.show('笔记加载失败','error'))}else sn(d)}).catch(()=>toast.show('笔记加载失败','error'))}
-function sn(d){document.getElementById('nv').innerHTML=skNote();if(d.error){document.getElementById('nv').innerHTML=`<p class="text-red-500">${esc(d.error)}</p>`;return}const mc={project:'blue',knowledge:'emerald',writing:'violet',diary:'amber'};var cr=d.meta.created||'',up=d.meta.updated||'',timeInfo='';if(cr)timeInfo+=cr.slice(0,10);if(up&&up!=cr)timeInfo+=' → '+up.slice(0,10);if(timeInfo)timeInfo='<span class="text-gray-400 text-xs">🕐 '+timeInfo+'</span>';currentEditPath=d.path;var rendered=renderNoteHtml(d.content);let h=bc(d.path)+`<div class="edit-toolbar"><button onclick="ne('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">✏️ 编辑</button><button onclick="nd('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">💾 下载 .md</button><button onclick="nh('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">📜 历史</button><button onclick="nq('${jss(d.path)}')" class="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded cursor-pointer hover:bg-blue-100" title="AI质量评估">📊 评估</button></div><div class="mb-3 flex gap-2 flex-wrap items-center">${(d.meta.tags||[]).map(t=>`<span class="bg-${mc[d.meta.type]||'gray'}-50 text-${mc[d.meta.type]||'gray'}-600 text-xs px-2 py-0.5 rounded-full border border-${mc[d.meta.type]||'gray'}-200">${esc(t)}</span>`).join('')}<span class="text-gray-400 text-xs">${esc(d.path)}</span>${timeInfo}</div><div class="note-content" id="noteViewContent">${rendered.html}</div><div id="noteEditArea" class="hidden"></div><div id="nback" class="mt-6"></div><div id="kbPluginNote" class="mt-6"></div><div id="nrel" class="mt-6"><p class="text-xs text-gray-400 cursor-pointer hover:text-blue-500" onclick="nrl('${jss(d.path)}')">📎 加载相关内容...</p></div>`;document.getElementById('nv').innerHTML=h;if(rendered.toc){document.getElementById('tocPanel').classList.remove('hidden');document.getElementById('tocContent').innerHTML=rendered.toc}else{document.getElementById('tocPanel').classList.add('hidden')}
+function rn(p,wl){if(wl){ap('/api/links/resolve?target='+encodeURIComponent(p)+(currentEditPath?'&from='+encodeURIComponent(currentEditPath):'')).then(d=>{if(d&&d.resolved)rn(d.resolved);else wlMissing(p)}).catch(()=>toast.show('双链解析失败','error'));return}var pp=p;if(!p.includes('.'))pp=p+'.md';ap('/notes/'+encodeURIComponent(pp)).then(d=>{if(d.error&&!p.includes('.')){ap('/notes/'+encodeURIComponent(p)).then(d2=>sn(d2)).catch(()=>toast.show('笔记加载失败','error'))}else sn(d)}).catch(()=>toast.show('笔记加载失败','error'))}
+function sn(d){document.getElementById('nv').innerHTML=skNote();if(d.error){document.getElementById('nv').innerHTML=`<p class="text-red-500">${esc(d.error)}</p>`;return}const mc={project:'blue',knowledge:'emerald',writing:'violet',diary:'amber'};var cr=d.meta.created||'',up=d.meta.updated||'',timeInfo='';if(cr)timeInfo+=cr.slice(0,10);if(up&&up!=cr)timeInfo+=' → '+up.slice(0,10);if(timeInfo)timeInfo='<span class="text-gray-400 text-xs">🕐 '+timeInfo+'</span>';currentEditPath=d.path;var rendered=renderNoteHtml(d.content);let h=bc(d.path)+`<div class="edit-toolbar"><button onclick="ne('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">✏️ 编辑</button><button onclick="nd('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">💾 下载 .md</button><button onclick="nh('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">📜 历史</button><button onclick="nm('${jss(d.path)}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded transition" style="background:var(--hover);color:var(--text2)">📁 移动</button><button onclick="nq('${jss(d.path)}')" class="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded cursor-pointer hover:bg-blue-100" title="AI质量评估">📊 评估</button></div><div class="mb-3 flex gap-2 flex-wrap items-center">${(d.meta.tags||[]).map(t=>`<span class="bg-${mc[d.meta.type]||'gray'}-50 text-${mc[d.meta.type]||'gray'}-600 text-xs px-2 py-0.5 rounded-full border border-${mc[d.meta.type]||'gray'}-200">${esc(t)}</span>`).join('')}<span class="text-gray-400 text-xs">${esc(d.path)}</span>${timeInfo}</div><div class="note-content" id="noteViewContent">${rendered.html}</div><div id="noteEditArea" class="hidden"></div><div id="nback" class="mt-6"></div><div id="kbPluginNote" class="mt-6"></div><div id="nrel" class="mt-6"><p class="text-xs text-gray-400 cursor-pointer hover:text-blue-500" onclick="nrl('${jss(d.path)}')">📎 加载相关内容...</p></div>`;document.getElementById('nv').innerHTML=h;if(rendered.toc){document.getElementById('tocPanel').classList.remove('hidden');document.getElementById('tocContent').innerHTML=rendered.toc}else{document.getElementById('tocPanel').classList.add('hidden')}
 // 正文渲染完再做两件异步事，都不阻塞首屏：
 // ① 批量解析双链，标出断链；② 拉反向链接面板。
 try{resolveLinksIn(document.getElementById('noteViewContent'),d.path)}catch(e){}
+// 内嵌 ![[笔记]]：解析目标后逐篇拉正文填入（异步，不阻塞首屏）
+try{embedWikilinksIn(document.getElementById('noteViewContent'),d.path)}catch(e){}
 // 第 5 项：批量探测正文里的绝对路径，把占位徽标换成真实状态。
 try{probePathsIn(document.getElementById('noteViewContent'))}catch(e){}
 try{
@@ -766,10 +768,46 @@ closeMobilePanels();}
 function nrl(p){document.getElementById('nrel').innerHTML='<p class="text-xs text-gray-400">加载中...</p>';ap('/api/notes/'+encodeURIComponent(p)+'/related').then(d=>{var r=d.related||[],fs=x=>{var s=Number(x.display_score??x.score??0);if(!isFinite(s))s=0;s=Math.max(0,Math.min(1,s));return (s*100).toFixed(0)+'%'};document.getElementById('nrel').innerHTML=r.length?('<h4 class="text-sm font-semibold text-gray-500 mb-2">📎 相关内容 ('+r.length+'篇)</h4>'+r.map(x=>`<div class="card p-3 mb-2 cursor-pointer hover:border-blue-300 transition" onclick="st('notes');setTimeout(()=>rn('${jss(x.path)}'),200)"><span class="font-medium text-sm text-gray-800">${esc(x.title||String(x.path||'').split('/').pop())}</span><span class="text-xs text-blue-500 ml-2" title="原始分数: ${esc(x.score??'')}">${fs(x)}</span><div class="text-xs text-gray-400">${esc(x.path)}</div></div>`).join('')):'<p class="text-xs text-gray-400">无相关内容</p>'}).catch(()=>{document.getElementById('nrel').innerHTML='<p class="text-xs text-gray-400">加载失败</p>'})}
 function nq(p){ap('/api/llm/quality',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})}).then(d=>{var q=d.quality||{},score=q.score||0,c=score>=80?'emerald':score>=60?'blue':score>=40?'amber':'red';var h='<div class="mt-2 p-3 rounded-lg border border-'+c+'-200 bg-'+c+'-50"><div class="flex items-center gap-2"><span class="text-2xl font-bold text-'+c+'-600">'+score+'</span><span class="text-xs text-gray-500">/100</span></div>';if(q.strengths?.length)h+='<div class="text-xs text-emerald-600 mt-1">✓ '+esc(q.strengths.slice(0,2).join(', '))+'</div>';if(q.improvements?.length)h+='<div class="text-xs text-amber-600 mt-1">→ '+esc(q.improvements.slice(0,2).join(', '))+'</div>';h+='</div>';document.getElementById('nv').insertAdjacentHTML('beforeend',h)}).catch(()=>{toast.show('评估失败','error')})}
 // ─── 笔记编辑 K1 ───
-function ne(p){var vc=document.getElementById('noteViewContent'),ea=document.getElementById('noteEditArea');vc.classList.add('hidden');ea.classList.remove('hidden');ap('/notes/'+encodeURIComponent(p)).then(d=>{if(d.error){toast.show(d.error,'error');return}ea.innerHTML='<textarea id="editTextarea" class="edit-textarea">'+d.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')+'</textarea><div class="edit-toolbar mt-3"><button onclick="ns(\''+jss(p)+'\')" id="saveBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition">💾 保存</button><button onclick="document.getElementById(\'noteViewContent\').classList.remove(\'hidden\');document.getElementById(\'noteEditArea\').classList.add(\'hidden\')" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded text-sm transition" style="background:var(--hover);color:var(--text2)">取消</button><span class="text-xs text-gray-400 ml-2">Ctrl+S 快捷保存</span></div>';var ta=document.getElementById('editTextarea');ta.focus();ta.addEventListener('keydown',function(e){if(e.ctrlKey&&e.key==='s'){e.preventDefault();ns(p)}})}).catch(e=>{toast.show('加载失败','error');vc.classList.remove('hidden');ea.classList.add('hidden')})}
+function ne(p){var vc=document.getElementById('noteViewContent'),ea=document.getElementById('noteEditArea');vc.classList.add('hidden');ea.classList.remove('hidden');ap('/notes/'+encodeURIComponent(p)).then(d=>{if(d.error){toast.show(d.error,'error');return}ea.innerHTML='<textarea id="editTextarea" class="edit-textarea">'+d.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')+'</textarea><div class="edit-toolbar mt-3"><button onclick="ns(\''+jss(p)+'\')" id="saveBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition">💾 保存</button><button onclick="document.getElementById(\'noteViewContent\').classList.remove(\'hidden\');document.getElementById(\'noteEditArea\').classList.add(\'hidden\')" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-4 py-2 rounded text-sm transition" style="background:var(--hover);color:var(--text2)">取消</button><span class="text-xs text-gray-400 ml-2">Ctrl+S 快捷保存</span></div>';var ta=document.getElementById('editTextarea');ta.focus();ta.addEventListener('keydown',function(e){if(e.ctrlKey&&e.key==='s'){e.preventDefault();ns(p)}});wlBindComplete(ta)}).catch(e=>{toast.show('加载失败','error');vc.classList.remove('hidden');ea.classList.add('hidden')})}
 function ns(p){var btn=document.getElementById('saveBtn'),ct=document.getElementById('editTextarea').value;if(btn)btn.disabled=true;ap('/notes/'+encodeURIComponent(p),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:ct})}).then(d=>{if(d.error){toast.show(d.error,'error');if(btn)btn.disabled=false;return}toast.show('✅ 已保存','success');document.getElementById('noteViewContent').classList.remove('hidden');document.getElementById('noteEditArea').classList.add('hidden');ltInvalidate();rn(p)}).catch(e=>{toast.show('保存失败','error');if(btn)btn.disabled=false})}
 // ─── 笔记下载 K2 ───
 function nd(p){ap('/notes/'+encodeURIComponent(p)).then(d=>{if(d.error){toast.show(d.error,'error');return}var fn=(p.split('/').pop()||'note');if(!fn.endsWith('.md'))fn+='.md';var blob=new Blob([d.content||''],{type:'text/markdown;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fn;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);toast.show('📥 下载完成','success')}).catch(e=>{toast.show('下载失败','error')})}
+// ─── 笔记改名 / 移动 K4（复用后端 /api/notes/<path>/move） ───
+/**
+ * 改名 / 移动：先 dry_run 让用户看到「会改哪些笔记的引用」，确认后再真移。
+ * update_links=true 由后端事务性改写双链（中途失败会整体回滚）。
+ * 注意：dry_run 的预演清单是后端「真算一遍链接改写再丢弃」，不是猜的。
+ */
+function nm(p){
+  var to=prompt('移动到（相对笔记库的路径，要含文件名）：',p);
+  if(to===null)return;
+  to=String(to).trim();
+  if(!to||to===p)return;
+  ap('/api/notes/'+encodeURIComponent(p)+'/move',
+     {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({to:to,update_links:true,dry_run:true})})
+  .then(function(d){
+    if(d&&d.error){toast.show('预演失败：'+(d.error||''),'error');return}
+    var ls=(d&&d.links_updated)||[];
+    var msg='移动到：\n'+to+'\n\n';
+    msg+= ls.length
+      ? '将同时更新 '+ls.length+' 篇笔记里的引用：\n'
+        + ls.slice(0,8).map(function(x){return '· '+x.path+'（'+x.count+' 处）'}).join('\n')
+        + (ls.length>8?'\n… 共 '+ls.length+' 篇':'')
+      : '没有其它笔记引用它，不会改动别的文件。';
+    if(!confirm(msg+'\n\n确认移动？'))return;
+    ap('/api/notes/'+encodeURIComponent(p)+'/move',
+       {method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({to:to,update_links:true,dry_run:false})})
+    .then(function(r){
+      if(r&&r.error){toast.show('移动失败：'+(r.error||''),'error');return}
+      toast.show('✅ 已移动到 '+to,'success');
+      ltInvalidate();lt();
+      rn(to);
+    }).catch(function(){toast.show('移动失败','error')});
+  }).catch(function(){toast.show('预演失败','error')});
+}
+
 // ── 安全渲染：笔记正文是不可信输入（可能来自上传、MCP 写入、他人分享） ──
 // marked 默认放行原始 HTML，等于把 <img src=x onerror=...> 直接送进 innerHTML。
 // 这里关掉 raw HTML 通路，并约束链接/图片协议，仅保留 markdown 自身语义。
@@ -799,10 +837,27 @@ function hardenMarked(){
     }
   }});
 }
-function m2(md){
+function m2(md,opts){
   hardenMarked();
   marked.setOptions({breaks:true,gfm:true,headerIds:false,mangle:false});
   var s=String(md==null?'':md);
+  var allowEmbed=!(opts&&opts.embed===false);
+  // 0. Pre-process: 嵌入 ![[x]] → 占位。
+  //    必须早于普通双链：否则 ![[x]] 里的 [[x]] 先被下面的 wikilink 规则吃掉，
+  //    只剩一个孤零零的 "!"。同样按代码段切开，代码里的语法示范不处理。
+  var embeds=[];
+  var segE=s.split(/(```[\s\S]*?```|`[^`\n]*`)/);
+  for(var ei=0;ei<segE.length;ei++){
+    if(ei%2===1)continue;
+    segE[ei]=segE[ei].replace(/!\[\[([^\]]+)\]\]/g,function(m,inner){
+      var p=inner.split('|')[0].replace(/\\+$/,'').trim();
+      if(!p||p.endsWith('/'))return m;
+      if(!allowEmbed)return '[['+inner+']]';   // 内层不再展开，退化成普通双链
+      embeds.push(p);
+      return '␟EM'+(embeds.length-1)+'␟';
+    });
+  }
+  s=segE.join('');
   // 1. Pre-process: wikilinks → unique HTML placeholders
   //    只在「非代码段」里替换。文档里写「示例：`[[笔记名]]`」这种代码内的语法示范
   //    也是 [[...]]，整篇正则替换会把它变成可点链接——加了断链标注后还会标红，
@@ -836,9 +891,17 @@ function m2(md){
   });
   // 3. Render via marked.js
   var html=marked.parse(s);
-  // 4. Post-process: restore wikilink + image placeholders
+  // 4. Post-process: restore wikilink + image + embed placeholders
   for(var i=0;i<wl.length;i++)html=html.split('␟WL'+i+'␟').join(wl[i]);
   for(var j=0;j<imgs.length;j++)html=html.split('␟IM'+j+'␟').join(imgs[j]);
+  // 嵌入占位：真身由 embedWikilinksIn() 在挂载后异步填入。m2() 是纯字符串函数，
+  // 在这里发请求会拖慢首屏，也没法单测。
+  for(var k=0;k<embeds.length;k++){
+    html=html.split('␟EM'+k+'␟').join(
+      '<div class="wl-embed" data-wl-embed="'+escapeHtml(embeds[k])+'">'+
+      '<div class="wl-embed-head">📄 '+escapeHtml(embeds[k])+'</div>'+
+      '<div class="wl-embed-body"><span class="wl-embed-loading">加载中…</span></div></div>');
+  }
   // 5. Post-process: local file links → authenticated download handler
   html=html.replace(/<a href="((?!https?:\/\/|#)[^"]+)"/g,function(m,href){
     // href 此时是 HTML 转义后的字符串（&amp; 等），需还原再按 JS 规则转义
@@ -920,6 +983,109 @@ function markAbsPaths(html){
   return parts.join('');
 }
 
+// ─── 双链输入补全 K3 ───
+/**
+ * 判断光标是否处在「未闭合的 [[」里，返回 {start, query} 或 null。
+ *  - start：`[[` 的起始下标（含）；query：`[[` 之后到光标之间的文本
+ * 从光标往前扫：先撞 `]]` 或换行 → 不在补全中；先撞 `[[` → 在补全中。
+ * 已经在写别名/锚点（`|` / `#`）时不再补全，避免把 `[[x|别名` 也当查询。
+ */
+function wlCompleteContext(value,caret){
+  var s=String(value==null?'':value);
+  var c=Math.max(0,Math.min(Number(caret)||0,s.length));
+  var head=s.slice(0,c);
+  var open=head.lastIndexOf('[[');
+  if(open<0)return null;
+  var seg=head.slice(open+2);
+  if(seg.indexOf('\n')>=0||seg.indexOf(']]')>=0)return null;
+  if(seg.indexOf('|')>=0||seg.indexOf('#')>=0)return null;
+  return {start:open,query:seg};
+}
+
+/**
+ * 按 query 过滤候选（数据源 = /api/notes/tree 的完整条目）。纯函数，便于单测。
+ * 排序：标题前缀命中 > 路径命中 > 其它包含；同档短的标题优先，再按路径字典序。
+ * 空 query 时按「短的优先」列出，用户打第一个字就能快速收敛。
+ */
+function wlCandidates(items,query,limit){
+  var q=String(query||'').toLowerCase().trim();
+  var out=[];
+  (items||[]).forEach(function(it){
+    var p=String((it&&it.path)||'');
+    if(!p)return;
+    var t=String((it&&it.title)||p.split('/').pop()||'');
+    var hay=(t+' '+p).toLowerCase();
+    if(q&&hay.indexOf(q)<0)return;
+    var stem=t.toLowerCase(),pl=p.toLowerCase();
+    var rank=q?(stem.indexOf(q)===0?0:(pl.indexOf(q)>=0?1:2)):2;
+    out.push({path:p,title:t,rank:rank});
+  });
+  out.sort(function(a,b){
+    if(a.rank!==b.rank)return a.rank-b.rank;
+    if(a.title.length!==b.title.length)return a.title.length-b.title.length;
+    return a.path<b.path?-1:(a.path>b.path?1:0);
+  });
+  return out.slice(0,Math.max(1,Number(limit)||20));
+}
+
+/** 把选中的候选写回 textarea：替换掉 `[[` 之后到光标的内容，补上 `]]`。 */
+function wlInsert(ta,ctx,item){
+  if(!ta||!ctx||!item)return;
+  var v=ta.value;
+  var c=ta.selectionStart==null?(ctx.start+2+ctx.query.length):ta.selectionStart;
+  var ins=String(item.path||'').replace(/\.md$/,'')+']]';
+  ta.value=v.slice(0,ctx.start+2)+ins+v.slice(c);
+  var pos=ctx.start+2+ins.length;
+  try{ta.setSelectionRange(pos,pos)}catch(e){}
+  ta.focus();
+}
+
+/** 候选浮层：单例，挂在 body 上，贴着编辑区下沿显示。 */
+function wlCompleteHide(){
+  var el=document.getElementById('wlComplete');
+  if(el){el.classList.add('hidden');el.innerHTML=''}
+}
+function wlBindComplete(ta){
+  if(!ta)return;
+  var box=document.getElementById('wlComplete');
+  if(!box){box=document.createElement('div');box.id='wlComplete';box.className='wl-complete hidden';document.body.appendChild(box)}
+  var cur=[],sel=0,ctx=null;
+  function place(){
+    var r=ta.getBoundingClientRect();
+    box.style.left=r.left+'px';
+    box.style.top=(r.bottom+4)+'px';
+    box.style.width=Math.min(r.width,420)+'px';
+  }
+  function render(){
+    if(!ctx||!cur.length)return wlCompleteHide();
+    place();box.classList.remove('hidden');
+    box.innerHTML=cur.map(function(x,i){
+      return '<div class="wl-cand'+(i===sel?' wl-cand-on':'')+'" data-i="'+i+'">'
+        +'<span class="wl-cand-t">'+escapeHtml(x.title)+'</span>'
+        +'<span class="wl-cand-p">'+escapeHtml(x.path)+'</span></div>';
+    }).join('');
+    Array.prototype.forEach.call(box.querySelectorAll('.wl-cand'),function(n){
+      n.onmousedown=function(e){e.preventDefault()};   // 别让 textarea 失焦，否则 click 前就被隐藏
+      n.onclick=function(){var i=Number(n.getAttribute('data-i')||0);wlInsert(ta,ctx,cur[i]);ctx=null;cur=[];wlCompleteHide()};
+    });
+  }
+  function refresh(){
+    ctx=wlCompleteContext(ta.value,ta.selectionStart);
+    if(!ctx)return wlCompleteHide();
+    if(!_ntItems){lt();return wlCompleteHide()}   // 目录树还没加载：先拉一次，下一击字就有了
+    cur=wlCandidates(_ntItems,ctx.query,20);sel=0;render();
+  }
+  ta.addEventListener('input',refresh);
+  ta.addEventListener('click',refresh);
+  ta.addEventListener('keydown',function(e){
+    if(!ctx||!cur.length)return;
+    if(e.key==='ArrowDown'){e.preventDefault();sel=(sel+1)%cur.length;render()}
+    else if(e.key==='ArrowUp'){e.preventDefault();sel=(sel-1+cur.length)%cur.length;render()}
+    else if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();wlInsert(ta,ctx,cur[sel]);ctx=null;cur=[];wlCompleteHide()}
+    else if(e.key==='Escape'){ctx=null;cur=[];wlCompleteHide()}
+  });
+}
+
 // ─── 第 7-1 项：断链标注 + 反向链接 ───
 /**
  * 把批量解析结果标到已渲染的正文上：解析不到（null）的双链加 .wl-broken。
@@ -960,6 +1126,70 @@ function resolveLinksIn(container,from){
   }).then(function(d){
     return markBrokenLinks(container,(d&&d.resolved)||{});
   }).catch(function(){return 0});
+}
+
+/**
+ * 内嵌 `![[笔记]]`：批量解析目标 → 逐篇拉正文 → 用 m2(embed:false) 渲染填入。
+ * 只展开一层（内层不再展开嵌入，避免自引用 / 互引死循环）；
+ * 自引用与解析不到的目标都不发请求，就地给出提示。
+ */
+function embedWikilinksIn(container,from){
+  if(!container||typeof ap!=='function')return Promise.resolve(0);
+  var nodes=container.querySelectorAll('[data-wl-embed]');
+  if(!nodes.length)return Promise.resolve(0);
+  var targets=[];
+  for(var i=0;i<nodes.length;i++){
+    var t=nodes[i].getAttribute('data-wl-embed');
+    if(t&&targets.indexOf(t)<0)targets.push(t);
+  }
+  if(!targets.length)return Promise.resolve(0);
+  var cur=from||currentEditPath||'';
+  return ap('/api/links/resolve-batch',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({from:cur,targets:targets})
+  }).then(function(d){
+    var res=(d&&d.resolved)||{},jobs=[];
+    for(var i=0;i<nodes.length;i++)(function(el){
+      var t=el.getAttribute('data-wl-embed'),body=el.querySelector('.wl-embed-body'),p=res[t];
+      function miss(msg){
+        el.classList.add('wl-broken');
+        if(body)body.innerHTML='<span class="wl-embed-missing">'+msg+'</span>';
+      }
+      if(!p)return miss('目标不存在：'+escapeHtml(t));
+      if(p===cur)return miss('（跳过自引用）');
+      jobs.push(ap('/notes/'+encodeURIComponent(p)).then(function(nd){
+        if(!nd||nd.error||typeof nd.content!=='string')return miss('加载失败');
+        if(body)body.innerHTML=m2(nd.content,{embed:false});
+      }).catch(function(){miss('加载失败')}));
+    })(nodes[i]);
+    return Promise.all(jobs).then(function(){
+      // 嵌入正文里也有双链，一并标断链（m2 已给它们 data-wl）
+      return resolveLinksIn(container,cur);
+    });
+  }).catch(function(){return 0});
+}
+
+/**
+ * 断链处理：点「目标不存在」的红链时，问一句要不要就地新建这篇。
+ * 走现有 POST /notes（经写入守卫；quality_check=false 以便先落草稿），
+ * 被守卫拦下时把后端错误原样提示，不静默失败。
+ */
+function wlMissing(p){
+  var seg=String(p).split('/'),title=seg.pop()||String(p),subdir=seg.join('/');
+  if(!confirm('「'+p+'」还不存在。\n\n现在新建这篇笔记？\n落点：'+(subdir?subdir+'/':'')+title+'.md'))return;
+  ap('/notes',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({title:title,subdir:subdir,type:'knowledge',
+                         content:'# '+title+'\n',quality_check:false})})
+  .then(function(d){
+    if(d&&d.error){toast.show('新建失败：'+(d.error||''),'error');return}
+    toast.show('✅ 已新建：'+((d&&d.path)||title),'success');
+    ltInvalidate();lt();
+    // 落点由后端规范化决定，未必正好命中双链目标——复查一次，仍断就如实说。
+    var c=document.getElementById('noteViewContent');
+    if(c)resolveLinksIn(c,currentEditPath).then(function(n){
+      if(n>0)toast.show('已新建，但仍有双链未解析到，请核对路径','error');
+    }).catch(function(){});
+  }).catch(function(){toast.show('新建失败','error')});
 }
 
 /**

@@ -964,6 +964,14 @@ def _move_one(src_rel, to_rel, update_links=False, dry_run=False):
         "links_updated": [],
     }
     if dry_run:
+        # 预演：不落盘，但把「将改动哪些笔记的引用」一并回报，供前端确认后再真移。
+        if update_links:
+            try:
+                payload["links_updated"] = _rewrite_links_to(
+                    src_rel, to_rel, dry_run=True)
+            except Exception:
+                log.warning("move dry-run 预演链接改写失败: %s -> %s",
+                            src_rel, to_rel, exc_info=True)
         return payload, 200
 
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1100,7 +1108,7 @@ def _link_source_docs():
     return paths, texts
 
 
-def _rewrite_links_to(old_rel, new_rel, undo=None):
+def _rewrite_links_to(old_rel, new_rel, undo=None, dry_run=False):
     """把全库指向 old_rel 的双链改写成 new_rel，返回被改的笔记列表。
 
     只处理能解析到 old_rel 的链接（复用 links.resolve_wikilink），
@@ -1108,6 +1116,8 @@ def _rewrite_links_to(old_rel, new_rel, undo=None):
 
     `undo` 传入一个 list 时，每改一篇就把 (相对路径, 改写前原文) 追加进去，
     供调用方在后续步骤失败时还原（见 `_rollback_move`）。
+
+    `dry_run=True` 只清点「会改哪些笔记」，不落盘、不入 undo，供移动前预演。
     """
     changed = []
     paths, contents = _link_source_docs()
@@ -1140,6 +1150,9 @@ def _rewrite_links_to(old_rel, new_rel, undo=None):
             continue
         new_raw, n = _sub_links(raw, p, old_rel, new_rel, ids, title_index, stem_index)
         if n:
+            if dry_run:
+                changed.append({"path": p, "count": n})
+                continue
             if undo is not None:
                 undo.append((p, raw))
             (NOTES_DIR / p).write_text(new_raw, encoding="utf-8")

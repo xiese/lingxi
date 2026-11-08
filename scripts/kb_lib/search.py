@@ -281,16 +281,6 @@ def _index_arrays_path():
     return Path(str(INDEX_FILE) + ".arrays.npz")
 
 
-def _legacy_index_path():
-    """旧 pickle 索引路径：由 INDEX_FILE 推导，保证测试 patch 一个常量即可隔离。
-
-    `.search_index.json` → `.search_index.pkl`；测试里把 INDEX_FILE 指到
-    `tmp/.search_index.pkl` 时推导结果与原值相同（新格式就写在该路径）。
-    """
-    p = Path(INDEX_FILE)
-    return p if p.suffix == ".pkl" else p.with_suffix(".pkl")
-
-
 def _dump_index_payload(paths, contents, mtimes, bm25):
     """把主索引写成新格式：`<INDEX_FILE>`（JSON）+ `<INDEX_FILE>.arrays.npz`。
 
@@ -1683,51 +1673,10 @@ class SearchIndex:
             _stale_cache["ts"] = time.time()
         return count
 
-    def _migrate_legacy_pickle(self):
-        """把旧 pickle 主索引一次性迁到新格式（JSON + npz），返回是否成功。
-
-        只有「INDEX_FILE 存在但按 JSON 读不出来」时才会走到这里。读到后立刻
-        按新格式重写，并把旧文件改名为 `<INDEX_FILE>.legacy` 保留（不删除，
-        便于回滚核对）。迁移只发生一次，之后加载永远不再碰 pickle。
-
-        TODO(下个版本): 删除本函数与对旧格式的读取，旧 `.legacy` 文件由运维清理。
-        """
-        import pickle  # 局部导入：仅迁移路径使用，主流程不依赖 pickle
-        src = _legacy_index_path()
-        if not src.exists():
-            return False
-        try:
-            with open(src, "rb") as f:
-                d = pickle.load(f)
-        except Exception:
-            log.warning("旧索引文件无法按旧格式读取，放弃迁移: %s", src, exc_info=True)
-            return False
-        if not isinstance(d, dict):
-            log.warning("旧索引内容不是字典，放弃迁移: %s", type(d).__name__)
-            return False
-        with self.lock:
-            self.bm25 = d.get("bm25")
-            self.paths = d.get("paths", [])
-            self.contents = d.get("contents", [])
-            self.mtimes = d.get("mtimes", {})
-            self._token_sets = None  # 分词集合不入盘，置脏按需重建
-        legacy = Path(str(src) + ".legacy")
-        try:
-            os.replace(src, legacy)
-        except OSError:
-            log.warning("旧索引改名失败，放弃迁移: %s", src, exc_info=True)
-            return False
-        self._save_index()
-        log.warning(
-            "索引格式迁移：旧 pickle 索引已读入并重写为新格式（JSON + npz），"
-            "旧文件保留为 %s。TODO: 下个版本删除旧格式读取。", legacy,
-        )
-        return True
-
     def _load_index_file(self):
-        """加载主索引（JSON + npz），含旧 pickle 一次性迁移与 bm25 重建兜底。
+        """加载主索引（JSON + npz），含 bm25 重建兜底。
 
-        返回 loaded：新格式索引存在且读取成功（含迁移成功）。读取异常只记日志、
+        返回 loaded：新格式索引存在且读取成功。读取异常只记日志、
         保持 loaded=False，由调用方决定走 build 全量重建。旧索引有 contents
         但无 bm25 时，立即分词重建并落盘。
         """
@@ -1747,13 +1696,7 @@ class SearchIndex:
                     self._token_sets = None  # 索引不存分词集合，置脏按需重建
                 loaded = True
             except Exception:
-                # 兼容 INDEX_FILE 被指到 .pkl 的旧部署/测试：该路径本身就是旧格式
-                loaded = self._migrate_legacy_pickle()
-                if not loaded:
-                    log.warning("主索引读取失败，将全量重建: %s", INDEX_FILE, exc_info=True)
-        elif _legacy_index_path().exists():
-            # 新格式不存在、旧 pickle 在场：读一次旧文件，立即写成新格式并留 .legacy
-            loaded = self._migrate_legacy_pickle()
+                log.warning("主索引读取失败，将全量重建: %s", INDEX_FILE, exc_info=True)
         # 兼容旧索引：若有 vectorizer 但无 bm25，触发重建
         if loaded and self.bm25 is None and self.contents:
             try:
@@ -1859,7 +1802,7 @@ class SearchIndex:
     def load(self):
         """索引加载主入口（薄编排）：pkl 加载 → 一致性自检 → 向量面裁决。
 
-        顺序与降级条件均与拆分前一致：先读主索引（含旧格式迁移与 bm25 重建兜底），
+        顺序与降级条件均与拆分前一致：先读主索引（含 bm25 重建兜底），
         再自检 paths/contents，然后按条件读 npy / faiss，最后由
         _apply_vector_consistency 决定向量面去留并写回全局状态。
         返回 loaded：主索引存在且读取成功（调用方据此决定是否 build 全量）。

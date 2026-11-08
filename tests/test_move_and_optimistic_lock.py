@@ -293,6 +293,34 @@ def test_move_不指定update_links则不动双链(cli):
     assert (notes / "10-项目/a.md").read_text(encoding="utf-8").count("[[b]]") == 1
 
 
+def test_move_dry_run_预演引用清单_不落盘(cli):
+    """dry_run + update_links：只回报会改哪些笔记，文件与引用一个字都不动。
+
+    前端「移动」按钮靠这条先给用户看影响面，再决定是否真移，
+    所以「清单正确」和「没落盘」两条都要断言 —— 只断言前者时，
+    预演顺手把文件移了也能过。
+    """
+    c, h, notes, _ = cli
+    _write(notes, "10-项目/b.md", "# B\n\n" + "内容" * 500 + "\n")
+    a_before = "# A\n\n" + "内容" * 500 + "\n\n引用 [[b]]\n"
+    _write(notes, "10-项目/a.md", a_before)
+
+    r = c.post("/api/notes/10-项目/b.md/move",
+               json={"to": "20-知识/b-新名.md", "update_links": True,
+                     "dry_run": True},
+               headers=h)
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["dry_run"] is True
+    assert [x["path"] for x in body["links_updated"]] == ["10-项目/a.md"]
+    assert body["links_updated"][0]["count"] == 1
+
+    assert (notes / "10-项目/b.md").exists(), "预演不得移动文件"
+    assert not (notes / "20-知识/b-新名.md").exists()
+    assert (notes / "10-项目/a.md").read_text(encoding="utf-8") == a_before, \
+        "预演不得改写引用"
+
+
 def test_move_改链接中途抛错_回滚到move前(cli, monkeypatch):
     """链接改写中途抛错 → 文件搬回原位、已改的链接还原、返回 500。
 

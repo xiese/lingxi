@@ -1,3 +1,70 @@
+## 1.0.19
+
+2026-11-08 发布。**双链用起来顺手**：编辑时输入 `[[` 弹候选、断链点击即新建、
+`![[笔记]]` 内嵌渲染；**Web 端补上改名/移动入口**（后端接口 10 月就有，前端一直没接），
+移动前先给「会改哪些引用」的预演清单；顺带**清掉旧 pickle 读取路径**（1.0.8 起标着
+「下个版本删除」的一次性迁移代码）。
+
+### 背景
+
+- 双链三件套里「解析 / 断链标红 / 反向链接」早在 10-18 就落了，但**写的时候没有辅助**：
+  编辑时得自己记住笔记叫什么、路径在哪；断链标红了也只能干看着，想补那篇得退出去重新新建。
+- 后端 `/api/notes/<path>/move`（含 `update_links` 事务性改链）与 `batch-move` 一直在，
+  但 Web 面板没有入口，整理目录还是只能上服务器手搬。
+- `search.py` 的 `_migrate_legacy_pickle()` 从 1.0.8 起就标着「TODO(下个版本): 删除」，
+  加载路径仍留着「读旧 pickle」这条死代码。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_lib/routes/routes_notes.py` | `_rewrite_links_to()` 新增 `dry_run` 参数（只清点、不落盘、不入 undo）；`_move_one()` 的 `dry_run` 分支据此回报 `links_updated` 预演清单 |
+| `scripts/web/app.js` | ① `m2(md, opts)` 支持 `opts.embed`（默认开）并识别 `![[x]]` → `.wl-embed` 占位；新增 `embedWikilinksIn()` 在阅读页异步拉正文填入（只展开一层） ② 新增 `wlCompleteContext / wlCandidates / wlInsert / wlBindComplete` 一组输入补全 ③ 新增 `nm()` 与阅读页「📁 移动」按钮 ④ `rn()` 的断链分支改走 `wlMissing()`（确认后就地新建） |
+| `scripts/web/index.html` | 新增 `.wl-complete / .wl-cand*`（候选浮层）与 `.wl-embed*`（内嵌块）样式 |
+| `scripts/kb_lib/search.py` | 删除 `_migrate_legacy_pickle()` 与 `_legacy_index_path()`；`_load_index_file()` 只认新格式，读取失败直接全量重建 |
+| `scripts/kb_lib/config.py` | 旧格式注释同步；VERSION 1.0.18 → 1.0.19 |
+| `tests/js/wikilink_complete_embed.test.cjs` | 新增 5 条前端回归 |
+| `tests/test_move_and_optimistic_lock.py` | 新增 `test_move_dry_run_预演引用清单_不落盘` |
+| `tests/test_index_consistency_a0.py` | 原「旧 pickle 迁移」用例改为「旧 pickle 不再被读取」 |
+
+### 口径
+
+- **补全不新增后端接口**：候选数据用前端已在内存的 `/api/notes/tree`（`_ntItems`）。
+  输入补全每次按键都发请求，而服务端解析双链要重建全库链接索引（见 `resolve-batch` 注释），
+  手机端会卡。
+- **插入的是相对路径**（去掉 `.md`），不是标题：`resolve_wikilink` 的优先级是
+  「路径 → 同目录 → 标题 → 文件名」，插路径最稳，重名标题不会插错。
+- **`![[x]]` 只展开一层**：内层用 `m2(..., {embed:false})`，不再展开嵌入，避免自引用与互引死循环；
+  自引用、断链都不发请求，就地提示。
+- **移动的预演清单是真算的**：`dry_run` 走同一个 `_rewrite_links_to()`（只是不写盘），
+  不是另写一套估算，所以清单与真移结果一致。
+- **拿掉旧 pickle 读取不影响存量**：生产索引早已是 `.search_index.json` + `.arrays.npz`
+  （旧 `.search_index.pkl` 不存在，`*.legacy` 是归档件、本来也不读）。加载只认新格式，
+  读不到就全量重建 —— 这正是原本的兜底行为。
+
+### 验证
+
+- `node --test tests/js/*.test.cjs` → **63 passed**（含新增 5 条）。
+- `python3 -m pytest tests/ -q --ignore=tests/js` → **732 passed / 13 failed / 2 skipped**；
+  13 个失败全部为既有的 `test_path_probe.py`（环境缺 sklearn），与改动前基线逐条一致。
+- `python3 scripts/ci/guard.py all` 通过。
+- 反向注入：临时摘掉 `dry_run` 的预演逻辑 → `test_move_dry_run_预演引用清单_不落盘` 立刻红
+  （`links_updated` 为空）；还原后绿。
+- 端到端实测（临时 `KB_ROOT` + `KB_PORT=8919`，服务自报 v1.0.19）：
+  - `/api/notes/tree` 返回条目含 `path` / `title`（补全数据源可用）；
+  - `resolve-batch`：`甲笔记` → `20-知识/甲笔记.md`，`还没写的笔记` → `null`（断链）；
+  - `move` dry_run：回报 `links_updated=[{path: 20-知识/引用者.md, count: 2}]`，文件原地未动；
+  - 同一次 move 真执行：文件改为 `甲笔记-新名.md`，引用者正文里 `[[甲笔记]]` → `[[甲笔记-新名]]`、
+    `![[甲笔记]]` → `![[甲笔记-新名]]`（`!` 保留），无关断链 `[[还没写的笔记]]` 未被误改。
+- 前端资源：`/web/` 返回 200 且含 `.wl-complete` 样式，`/web/app.js` 含
+  `wlBindComplete / embedWikilinksIn / nm(`。
+
+### 后续注意
+
+- 补全依赖目录树已加载（`_ntItems`）；未加载时会先异步拉一次，**当次不弹候选**，再输入一个字才生效。
+- `![[x]]` 渲染成只读引用块，不是带编辑能力的 transclusion；目标笔记改了不会自动刷新当前页。
+- 本版目前只在开发库；生产实例仍为 1.0.18，部署需单独授权。
+
 ## 1.0.18
 
 2026-11-07 发布。两项改动：**话术去权威化**——工具描述不再把知识库检索写成

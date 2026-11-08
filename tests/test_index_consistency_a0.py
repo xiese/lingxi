@@ -207,8 +207,12 @@ def test_bm25_roundtrip_scores_identical(iso_index):
     assert si2.paths == si.paths and si2.contents == si.contents
 
 
-def test_legacy_pickle_migrated_once_and_kept(iso_index, caplog):
-    """新格式缺失、旧 pickle 在场：读一次、写新格式、旧文件留 .legacy，并记 warning。"""
+def test_legacy_pickle_no_longer_read(iso_index):
+    """1.0.19 起不再读取旧 pickle：旧文件在场也当主索引不存在，走全量重建。
+
+    判据不是「旧文件还在」，而是「没拿它写出新索引、也没改名」——
+    只断言前者的话，迁移逻辑还留着也能过。
+    """
     import pickle
 
     legacy_path = iso_index["pkl"].with_suffix(".pkl")
@@ -223,16 +227,8 @@ def test_legacy_pickle_migrated_once_and_kept(iso_index, caplog):
         )
     )
     si = search_mod.SearchIndex()
-    with caplog.at_level("WARNING", logger="kb.search"):
-        assert si.load() is True
-    assert si.paths == ["old.md"]
-    assert iso_index["pkl"].exists(), "迁移后应写出新格式主索引"
-    assert json.loads(iso_index["pkl"].read_text(encoding="utf-8"))["format_version"] == 2
-    assert Path(str(legacy_path) + ".legacy").exists(), "旧文件应改名 .legacy 保留"
-    assert not legacy_path.exists()
-    assert any("迁移" in r.message for r in caplog.records)
+    assert si.load() is False, "旧 pickle 不再是有效的索引来源"
+    assert not iso_index["pkl"].exists(), "不得由旧数据写出新格式主索引"
+    assert legacy_path.exists(), "旧文件原地保留（清理交给运维）"
+    assert not Path(str(legacy_path) + ".legacy").exists(), "不再执行改名迁移"
 
-    # 第二次加载只读新格式，不再触发迁移
-    si2 = search_mod.SearchIndex()
-    assert si2.load() is True
-    assert si2.paths == ["old.md"]

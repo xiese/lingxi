@@ -175,6 +175,17 @@ mark.hl{background:#fef08a;color:#854d0e;padding:1px 3px;border-radius:2px;font-
    断链是「目标还没写」，不是「链接作废」，删除线会让人误以为内容已废弃。 */
 .wl-broken{color:#dc2626!important;border-bottom:1px dashed #dc2626;text-decoration:none!important;cursor:help}
 .dark .wl-broken{color:#f87171!important;border-bottom-color:#f87171}
+/* 双链输入补全候选浮层（K3） */
+.wl-complete{position:fixed;z-index:60;max-height:260px;overflow:auto;background:var(--card,#fff);border:1px solid var(--input-border,#e5e7eb);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.12)}
+.wl-cand{padding:6px 10px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+.wl-cand-on,.wl-cand:hover{background:var(--hover,#f3f4f6)}
+.wl-cand-t{font-size:13px;color:var(--text)}
+.wl-cand-p{font-size:11px;color:#9ca3af;margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%}
+/* ![[笔记]] 内嵌渲染 */
+.wl-embed{margin:10px 0;border:1px solid var(--input-border,#e5e7eb);border-left:3px solid var(--blue,#2563eb);border-radius:8px;background:var(--hover,#fafafa)}
+.wl-embed-head{font-size:12px;color:#6b7280;padding:6px 10px;border-bottom:1px dashed var(--input-border,#e5e7eb);cursor:pointer}
+.wl-embed-body{padding:8px 12px}
+.wl-embed-loading,.wl-embed-missing{font-size:12px;color:#9ca3af}
 /* 第 5 项：正文绝对路径徽标。三种状态必须一眼能分开——
    绿实线=本机可点，绿虚线=本机存在但不在库内（不可点），灰=本机没有。
    用「实线/虚线」而不是只换颜色：色弱也能靠线型区分。 */
