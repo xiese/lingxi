@@ -130,6 +130,52 @@ python3 scripts/kb-cli/kb-cli.py rebuild
 → 见 [`INDEXING.md`](INDEXING.md)：根因、修复（1.0.18 起文本面与向量面解耦）、
 验证证据、上线与回滚步骤。
 
+### 索引产物不一致 → 每次写入都触发全量嵌入重建（写入卡几分钟）
+
+**现象**：单次写入要等几分钟才返回。日志两条连着出现：
+
+```
+索引产物不一致，禁用向量检索: paths(2075) 与 embeddings(1985) 不一致
+全量嵌入超出单轮预算 300.0s（已处理 320/2074），中止本轮并强制回滚
+```
+
+**根因**：向量产物（`.embeddings.npy`）与 `paths` 行数对不上（历史错位），
+启动即禁用向量面；而**每次写入**的增量刷新发现对齐失败后都会退回「全量重建」，
+全量重建有 `_full_embed_budget = 300.0s` 的单轮预算（防持锁太久导致检索假死，
+见 `search.py` 的注释），预算内跑不完全量 → 中止回滚 → 下次写入再来一遍。
+上游常态下全量本来就跑不完，所以这个循环**不会自愈**。
+
+**处置**：在服务之外把向量一次算完，再原子落盘，最后重启服务。
+
+```bash
+# 1) 停服：重建期间不能再有写入（否则 paths 会变、又对不齐）
+systemctl stop kb-server
+# 2) 离线重建（脚本在仓库 scripts/ 下；KB_ROOT 必须显式给，见下面的「踩过的坑」）
+KB_ROOT=<数据根> python3 scripts/kb-rebuild-embeddings.py --dry-run   # 先看一批耗时与外推总时长
+KB_ROOT=<数据根> python3 scripts/kb-rebuild-embeddings.py             # 正式
+# 3) 起服并验证
+systemctl start kb-server
+curl -s 127.0.0.1:8899/health
+grep -oE '"(paths_count|embeddings_count|faiss_count|consistent)": [^,}]+' <KB_ROOT>/.index_manifest.json
+```
+
+**判据（三项都要满足，缺一不可）**：
+
+| 检查 | 通过的样子 |
+|---|---|
+| manifest 三项 | `paths_count` == `embeddings_count` == `faiss_count`，且 `consistent: true` |
+| 启动日志 | **没有**「索引产物不一致，禁用向量检索」 |
+| 写入耗时 | 一篇常规笔记回到 10 秒级（实测 9.7s） |
+
+**踩过的坑**：
+
+- 别指望「在线重建」：一是 300s 预算不够，二是重建期间只要有人写，`paths` 就变，
+  刚算好的向量又差一两篇，白白重来 —— **必须先停服**。
+- 脚本里要先钉 `KB_ROOT`（数据根）再 `import kb_lib`：生产的代码在 `<KB_ROOT>/current/`、
+  数据在 `<KB_ROOT>/`，不钉的话 `config.py` 按代码位置推算出 `current`，`load()` 读不到主索引（`paths=0`）。
+- 脚本复用了 `SearchIndex` 的私有方法（`_ensure_faiss_ids` / `_build_faiss_index` / `_save_faiss_ids`）
+  与 `_atomic_np_save` / `write_index_manifest`，改名了要先跑 `--dry-run` 确认。
+
 ### 相关度显示为 0%
 
 在小规模库中，归一化后可能显示为 0%。这不影响检索结果是否正确，仅表示该结果
