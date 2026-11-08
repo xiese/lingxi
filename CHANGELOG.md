@@ -49,6 +49,18 @@
   的不一致状态后写一篇 → **HTTP 201，耗时 7.4s**（旧版同级场景约 420s）；随后后台自愈
   把 manifest 补齐到 `paths_count 9 = embeddings_count 9、consistent true`。
 
+### 部署
+
+2026-11-08 22:06 上生产（1.0.19 → 1.0.21；1.0.20 未单独发版，一并跳过）。走
+`release-deploy.sh --version 1.0.21`：包自检通过 → 切 `current` → 重启 → 健康检查 200。
+部署后 `/health` `version 1.0.21`、`indexed 2082`，`.deploy-state.json`
+`current 1.0.21 / previous 1.0.19`；写侧门禁探针 HTTP 400 且磁盘无新增文件。
+**回滚**：`bash $KB_ROOT/release-deploy.sh --rollback`。
+
+发版过程踩到两个闸（都已修）：① `v1.0.20` 的 tag 只在本地打过没推，发布闸报
+「已合入但仓库没有这个 tag」；② `scripts/kb_lib/__init__.py` 在「随版本走的文件」清单里，
+注释中写版本号字面量会撞版本一致性闸。
+
 ## 1.0.20
 
 2026-11-08 发布。**设置页改为后端 schema 驱动**：设置项的分组、顺序、控件类型、选项、
