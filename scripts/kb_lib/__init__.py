@@ -144,7 +144,7 @@ def start_background():
     # 后台启动索引加载（load → 缺失则 build → 增量刷新 + 5 分钟周期刷新）
     threading.Thread(target=_init_index, daemon=True, name="kb-index-init").start()
 
-    # 启动自愈（1.0.21）：向量面若不可用（embeddings 与 paths 不一致 / 从没建过），
+    # 启动自愈：向量面若不可用（embeddings 与 paths 不一致 / 从没建过），
     # 由后台分片重建补齐 —— 不再等「下一次写入」去触发（那会把这次写入拖到分钟级）。
     def _vector_face_selfheal():
         time.sleep(20)          # 等 _init_index 把索引加载完
