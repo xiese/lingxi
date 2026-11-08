@@ -2006,7 +2006,7 @@ class SearchIndex:
 
         安全加固：`_bm25_search` 原先每请求对全库 contents 逐篇
         `_tokenize()`，而 `bm25.get_scores` 刚算过分数 —— 纯重复劳动。
-        1300 篇 × 800 字实测 13.7~14.1 s/query，与 top 无关；Flask 8 线程会
+        千级篇目 × 800 字实测 13.7~14.1 s/query，与 top 无关；Flask 8 线程会
         全部耗在分词上，检索整体不可用。
 
         缓存在 refresh / build / load 改写 contents 时被主动置 None，
@@ -2078,7 +2078,7 @@ class SearchIndex:
             # 命中判据用缓存的分词集合。原实现对 self.contents 逐篇
             # _tokenize()，而 bm25.get_scores 上面刚算过分数——每次检索
             # （含 llm 模式下 pool=20 的 _hybrid_search 调用）都把整个语料
-            # 重新切一遍：1300 篇×800 字实测 13.7~14.1 s/query，与 top 无关，
+            # 重新切一遍：千级篇目×800 字实测 13.7~14.1 s/query，与 top 无关，
             # Flask 8 线程会全部耗在分词上。缓存与 contents 同寿命，
             # 由 _token_sets_for() 在长度变化时重建、由 refresh/build 主动失效。
             n_paths = len(paths)
@@ -2494,7 +2494,7 @@ class SearchIndex:
         ① 行号会系统性偏移 21~22 行；② 只在 frontmatter 里提到的笔记会漏
         （实测会漏掉这类笔记）。读原文这两个问题都没有。
 
-        性能：全库 ~1300 篇实测 47~136ms，可接受。
+        性能：全库千级篇目实测 47~136ms，可接受。
         """
         needle = (needle or "").strip()
         try:

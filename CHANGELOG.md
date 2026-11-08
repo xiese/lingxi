@@ -53,7 +53,7 @@
 
 2026-11-08 22:06 上生产（1.0.19 → 1.0.21；1.0.20 未单独发版，一并跳过）。走
 `release-deploy.sh --version 1.0.21`：包自检通过 → 切 `current` → 重启 → 健康检查 200。
-部署后 `/health` `version 1.0.21`、`indexed 2082`，`.deploy-state.json`
+部署后 `/health` `version 1.0.21`、`indexed N`，`.deploy-state.json`
 `current 1.0.21 / previous 1.0.19`；写侧门禁探针 HTTP 400 且磁盘无新增文件。
 **回滚**：`bash $KB_ROOT/release-deploy.sh --rollback`。
 
@@ -519,7 +519,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 
 1.0.8 把主索引从 `.search_index.pkl` 换成 `.search_index.json` + `.arrays.npz`。`release-deploy.sh --rollback` 原先只切 `current` 软链，没考虑两个版本的索引格式不同，产生两个问题：
 
-1. **往 1.0.7 回滚会全量重建**。1.0.7 只认 `.pkl`，而库根只有 `.json`，它当成索引缺失 → 全量重建。1823 篇实测约 40 秒（分词 35.15s + BM25 2.08s + 落盘 2.75s），期间检索不可用，而 `/health` 照样返回 200，看不出异常。
+1. **往 1.0.7 回滚会全量重建**。1.0.7 只认 `.pkl`，而库根只有 `.json`，它当成索引缺失 → 全量重建。千级篇目实测约 40 秒（分词 35.15s + BM25 2.08s + 落盘 2.75s），期间检索不可用，而 `/health` 照样返回 200，看不出异常。
 2. **回滚后再升级会读到过期索引**。回滚到 1.0.7 后库根仍留着 1.0.8 的 `.json`，再升回 1.0.8 时它看到 `.json` 能读就直接用，用的是回滚前的旧数据。
 
 ### 改动
@@ -549,7 +549,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 
 端到端验证：
 
-- 用真实 1823 篇索引跑 `--rollback`，回滚后 1.0.7 的加载逻辑 **548 ms** 直接加载成功（1823 篇、bm25 非空），不再触发 40 秒重建
+- 用真实索引（千级篇目）跑 `--rollback`，回滚后 1.0.7 的加载逻辑 **548 ms** 直接加载成功（篇数对齐、bm25 非空），不再触发 40 秒重建
 - 反向验证：回滚后 1.0.7 期间新增 2 篇 → 再升 1.0.8 时走 `.pkl` 一次性迁移，加载到 **7 篇最新数据**，不是归档的 3 篇
 
 `bash -n` 语法检查通过；`guard all` 通过。
@@ -569,7 +569,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 
 ### 验证
 
-- 用生产真实索引（1823 篇、20,184,770 字节 pkl）实测迁移：
+- 用生产真实索引（千级篇目、十 MB 级 pkl）实测迁移：
   - 迁移加载 2600 ms，新 JSON 13,675,006 字节 + npz 2,349,382 字节 = 16,024,388 字节（旧格式的 **79.4%**）
   - 新格式二次加载 1440 ms，保存 2153 ms
   - **打分逐位一致**：5 个查询（知识库版本 / 对杀分路 / 雪球跟刀 / 微信 QQ / 服务器）前 5 名与分数全部相同
@@ -636,7 +636,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
   验证与遗留，内容取自本仓 `CHANGELOG.md` 对应版本段（主文与指针口径一致）。
 - 「（当前）」标记从 `v5.9.3` 移除；段首加判定口径：「版本号以 `/health` 返回的 `version`
   为准；v5.9.x 及更早为内部迭代编号，1.0.0 起为对外发布版本」。
-- 「数据状态」段刷新：`indexed` 1711→1810、项目笔记 66→68、知识笔记 61→63、
+- 「数据状态」段刷新：`indexed` 增约百篇、项目笔记 66→68、知识笔记 61→63、
   仪表盘可见 1982→2091、服务版本 1.0.2→1.0.4。
 
 ### 顺带清掉的干扰源
@@ -801,7 +801,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 - 连生产实例（192.0.2.10）实测 9 个只读工具全部返回正常：
   `memory_search`（命中 2）、`kb_search`（语义 3 条）、`kb_dual_search`、
   `kb_read`（2,127 字符）、`kb_list`、`kb_mentions`（6 篇 21 处）、
-  `kb_index_status`（indexed=1795, consistent=true）、`kb_dashboard`、`kb_note_hygiene`
+  `kb_index_status`（indexed=N, consistent=true）、`kb_dashboard`、`kb_note_hygiene`
 - 签名核对：`kb_update(path, content, archive_old=True, quality_check=False)`
 - 与改前对比：275 行新增 / 4 行删除（删的是 `from kb_mcp_memory import` 那 4 行）
 
@@ -836,7 +836,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 
 - `pytest tests/` → 594 passed, 2 skipped
 - `tests/js/*.test.cjs` → 20 个脚本退出码全 0
-- 真实浏览器（2116 篇笔记，含 27 篇梦境）：
+- 真实浏览器（千级篇笔记，含 27 篇梦境）：
   - 搜「待办」→ 5 个文件夹显示「命中 N 篇」，不再是无匹配
   - 搜「cpa」→ 10-项目 2 / 20-知识 21 / 50-档案 18
   - 搜「梦境」→ 60-梦境 命中 27 篇
@@ -851,7 +851,7 @@ IndexError: index 1867 is out of bounds for axis 0 with size 1867
 - 覆盖：`scripts/kb_lib/config.py`、`scripts/web/plugins/usage-boost/plugin.js`
 - 备份：`$KB_ROOT/backup-manual/{config.py,plugin.js}.bak-20261021-165342`
 - `VERSION` 同步升到 `1.0.4`（复制时曾把生产 1.0.3 带回 1.0.2，已修正）
-- 重启 `kb-server` 后生产实测：`/api/notes/tree` 2080 条、`60-梦境` 27 篇、
+- 重启 `kb-server` 后生产实测：`/api/notes/tree` 千级条、`60-梦境` 27 篇、
   一级目录出现 `60-梦境`；浏览器搜「待办」→ 5 文件夹命中、搜「梦境」→
   `60-梦境` 27 篇、`xyz不存在` → 无匹配、点进梦境 27 篇带面包屑、
   文件夹内搜「10-16」→ 1 篇。
@@ -894,7 +894,7 @@ GitHub 根提交 `7794127`（10-20 `filter-repo` 重建）。直接推送会抹�
 
 - 仓库侧：`guard.py all` 通过；`compileall scripts tests` 0 错误；
   `test_version_consistency.py` 5 项 PASS；`pytest tests/ scripts/tests/` → 599 passed, 2 skipped。
-- 生产侧：`/health` → `version=1.0.4`、`indexed≈1806`；`/api/notes/tree` 2125 条；
+- 生产侧：`/health` → `version=1.0.4`、`indexed≈N`；`/api/notes/tree` 千级条；
   `60-梦境` 25 篇可见；`/api/graph` meta 正常（2156 节点 / 112 wiki / 4730 语义）；
   `/api/mcp-usage` 390 次调用；`/search` 正常；`/api/llm/ask` 返回完整答案 + 16 条引用。
 - **日期前缀（本轮主目标）**：带 `dir` 上传 `2026-10-22 部署验收B2.md` →
@@ -1111,7 +1111,7 @@ GitHub 根提交 `7794127`（10-20 `filter-repo` 重建）。直接推送会抹�
 **背景**：生产机内存紧张（`available` 373M、swap 已用 1872M），冷启动后第一次访问
 `/health` 会卡住甚至超时。
 
-**实测先排除的猜测**：`count_stale()` 本身只要 0.023s（1200 篇），不是它慢；
+**实测先排除的猜测**：`count_stale()` 本身只要 0.023s（千级篇目），不是它慢；
 真正的成本是冷启动时进程页要从 swap 换回物理内存，任何重活都会被放大。
 
 **改动**
@@ -1348,7 +1348,7 @@ $ python3 -m pytest tests/ -q
 ### 改了什么
 
 - **默认视图 300 → 150 节点**（`lgOpts()` 的 `cap`）。按度数取，勾「显示全部」时仍不裁。
-- **裁剪优先保留有边节点**：全库 2015 节点里有 **1899 个 degree=0 的孤立点**，纯按度数排序取前 150 会混进 34 个没连线的散点；改成「先把有边节点全留下，再用孤立点补足」。
+- **裁剪优先保留有边节点**：全库千级节点里约九成是 **degree=0 的孤立点**，纯按度数排序取前 150 会混进 34 个没连线的散点；改成「先把有边节点全留下，再用孤立点补足」。
 - **标签不再硬截前 8 字**。旧实现 `ctx.fillText(title.slice(0,8))` 让 80 篇「示例项目…」在屏幕上全变成同一个「示例项目 组」。新逻辑：
   - 同前缀的一组节点，先剥掉**公共前缀**和**公共尾部**（多数笔记结尾都是 `_2026-09-16` 这类日期，不剥就会截出「叠 2026-09-16」这种词中间碎片），再从尾部保留区分度最高的片段，长度从 16 字起试。
   - 标题完全同名的（不同目录下的同名笔记，全库 74 组），改用**路径第一个分歧段**区分。
@@ -1468,7 +1468,7 @@ $ python3 -m pytest tests/ -q
 
 ## 2026-10-18 知识图谱主干裁剪与聚焦（第 2 项）
 
-- **背景**：生产图谱 1000 个节点 / 700 条边全铺开，是一团看不清的蜘蛛网；语义边占 380 条（86%），把真正的 wiki 引用关系盖住了
+- **背景**：生产图谱千级节点 / 数百条边全铺开，是一团看不清的蜘蛛网；语义边占 86%，把真正的 wiki 引用关系盖住了
 - **改动**
   - `index.html` tab-graph：`gSem` 语义边默认**不勾**、新增 `gWiki`（默认勾）、`gAll`「显示全部」
   - `app.js` 新增 `lgPrune(gd, cap, showAll)`：按 `degree` 降序取前 300，连带只保留两端都在保留集里的边；返回新对象不改入参
@@ -1503,9 +1503,9 @@ $ python3 -m pytest tests/ -q
 
 ## 2026-10-18 日志页清理/按需加载/按类筛选（第 4 项）
 
-- **背景**：审计日志长期未清理、条目过多；生产 `.audit.db` 实测 **3000 条**
+- **背景**：审计日志长期未清理、条目过多；生产 `.audit.db` 实测 **数千条**
 - **根因（代码+生产实测）**：
-  - `app.js` 的 `ll()` 一次拉 100 条，却把**全部分页按钮**一次性渲染（3000 条 = 30 页，页面底部铺满几百个数字）
+  - `app.js` 的 `ll()` 一次拉 100 条，却把**全部分页按钮**一次性渲染（数千条 = 数十页，页面底部铺满几百个数字）
   - `audit.py` 的 `cleanup_logs()` 只在写入路径每 300 秒触发，且阈值硬编码 `_MAX_ROWS = 50000` —— 39468 到不了，所以永远不清
   - 没有任何手动删除入口；筛选只有「动作下拉 + 设备文本框」
 - **改动**：
@@ -1535,7 +1535,7 @@ $ python3 -m pytest tests/ -q
 
 ## 2026-10-18 总览统计口径统一（第 8 项，维护者拍板）
 
-- **背景**：总览「项目」显示 280，容易被误读为项目个数——该字段数的是 `10-项目/` 下**所有 `.md` 篇数**（生产 300 篇），不是项目个数（生产 20 个一级目录）
+- **背景**：总览「项目」显示的是一个篇数，容易被误读为项目个数——该字段数的是 `10-项目/` 下**所有 `.md` 篇数**，不是项目个数（两者在生产上差一个数量级）
 - **定稿口径（维护者 2026-10-18 二次拍板）**：六张卡**全部统一**为「主数字数一级子目录个数，小字标笔记篇数」；只数一级子目录，不递归、不数文件，排除 `.` 与 `_` 开头；`total` 保持篇数合计不变
 - **后端** `scripts/kb_lib/routes/routes_general.py`：`dashboard()` 新增 `dir_counts` 一级子目录计数；返回新增 `*_notes`（六类篇数）、`total_dirs`、`dir_fallback`；`projects`/`knowledge`/`writing`/`records`/`diaries`/`archived` 六键语义改为目录数
 - **前端** `scripts/web/app.js`：`ld()` 六卡主数字改取目录数，小字统一「N 篇笔记」；`dir_fallback` 为真时主数字退化为篇数并注明「无子目录，按篇数显示」；总计卡主数字取 `total_dirs`、小字取 `total`
@@ -1549,7 +1549,7 @@ $ python3 -m pytest tests/ -q
 - **部署动作**：用户 2026-10-09 当轮明确授权「同步一下吧」→「重启吧」。rsync 同步 `scripts/` + `tests/` + `docs/` + `CHANGELOG.md`（133 个文件，2.1M）到生产 `$KB_ROOT/`，随后重启 `kb-server` 与 `kb-mcp-sse`
 - **同步范围与不动的项**：只传代码与文档；**笔记/、00-索引/、`.search_index.pkl`、`.faiss.index`、`.faiss.index.ids.json`、`.embeddings.npy`、`.api_tokens.json`、`.kb_settings.json`、`.audit.db`、`web.bak-*/` 旧前端备份、`kb-server.service` 一律未动**（生产 mtime 可证：`.faiss.index`/`.search_index.pkl` 保持 18:17、`ids.json` 保持 02:00、`settings` 保持 09-28）
 - **部署前验证（Python 3.10 前置，本项目首次在生产口径验证）**：本机只有 3.11，克隆库全绿是 3.11 口径。生产为 **3.10.12**，实测：① 全部 `.py` `compileall` exit=0；② `import kb_lib` + `create_app()` 成功、**71 个路由全部注册**；③ **完整 `pytest tests/ -q` = 205 passed**，与克隆库 3.11 口径完全一致，无版本差异
-- **部署后验证**：`/health` ok（indexed 800、stale 0）；**新增接口 `GET /api/notes/tree` 返回 200 / 950 篇 / 800KB / 0.97s**（旧代码无此接口，200 即证明新代码已加载）；`_full_path` 不泄漏；前端已引用 `app.js?v=20261008-tree1`；`kb_maintain.py check` = 76 项 75 通过 / 1 警告 / 0 错误；8 条只读检索基线 **top1 8/8**，分数区间 0.4517–0.9910（与部署前一致，无退步）
+- **部署后验证**：`/health` ok（indexed N、stale 0）；**新增接口 `GET /api/notes/tree` 返回 200 / 千级篇 / 数百 KB / 0.97s**（旧代码无此接口，200 即证明新代码已加载）；`_full_path` 不泄漏；前端已引用 `app.js?v=20261008-tree1`；`kb_maintain.py check` = 76 项 75 通过 / 1 警告 / 0 错误；8 条只读检索基线 **top1 8/8**，分数区间 0.4517–0.9910（与部署前一致，无退步）
 - **真实 rerank 降级路径实测（Round 1 遗留项，克隆库因连不上 远程服务器:3097 一直做不了）**：在生产本机以独立进程（零影响运行中服务）跑通全部四条路径——正常路径精排返回 3 条且 `degrade=None`；`rerank_timeout` 返回空、**不熔断**；`rerank_circuit_open` 窗内直接返回；`rerank_error` 返回空且**熔断 300s**。warning 四要素（query/耗时/候选数/降级模式）齐全，证实 B1 改动在生产真实环境行为正确
 - **回滚方案**：生产 git HEAD 为 `14b0f50`（生产 cron 每小时自动提交，已把本次同步内容打包提交）；回滚 = `git reset --hard 0379766`（同步前 HEAD）+ 重启两个服务
 - **过程疏漏（已记入教训）**：首次 rsync 的排除参数用了命令行通配符 `*.pkl` / `*.npy`，被当前 shell 提前 glob 展开导致排除规则部分失效（`.api_tokens.json.lock`、`.faiss.index.ids.json` 等运行期文件参与了比对）。**未造成损害**——rsync 按「修改时间+大小」判定克隆库那份与生产完全相同而跳过未传，生产各索引文件 mtime 均未变可证。后续改用 `--exclude-from` 文件重做校验，源码部分 checksum 逐字节零差异。**纪律：同步一律用 `--exclude-from`，不用命令行通配符**
@@ -1558,10 +1558,10 @@ $ python3 -m pytest tests/ -q
 
 - **功能**：检索结果按笔记写作日期加时间权重，新笔记适度靠前。`decay = 1 + 1/(1 + age/tau)`，与相关性分相乘后重排——**只重排不扩候选集**
 - **日期来源用 frontmatter（updated/created/date），不用 mtime**：实测多篇跨月笔记 mtime 被同步刷成同一天（如 `专题_竞品深读_2026-07-07.md` created=07-07 而 mtime=07-08），用 mtime 会让衰减静默失效。笔记无日期时该条 decay=1
-- **默认值 90**：离线实测 40 组查询 / 240 条结果 / 200 篇笔记，新笔记（<30 天）Top3 命中 22%→29%，整体平均名次 7.10→7.30（老笔记几乎不受影响）。对比：tau=30 过猛（中龄 Top3 掉到 10%）、tau≥365 无效
+- **默认值 90**：离线实测 40 组查询 / 数百条结果 / 百级篇笔记，新笔记（<30 天）Top3 命中 22%→29%，整体平均名次 7.10→7.30（老笔记几乎不受影响）。对比：tau=30 过猛（中龄 Top3 掉到 10%）、tau≥365 无效
 - **可配置**：新增设置项 `decay_tau_days`，面板设置页有输入框（`⏳ 检索时间衰减(天,0=关闭,建议90)`），也可 POST `/admin/settings`；`0` = 关闭。非法值自动回落 90
 - **实现**：`kb_lib/search.py` 新增 `_note_epoch()`（惰性 + 缓存，只读文件头 2048 字节取 frontmatter）与 `_apply_time_decay()`，接在 `_hybrid_search` 三条返回路径（精排正常 / 精排降级 / 异常兜底）之后、return 之前；索引清空、全量重建、增量更新三处均失效日期缓存。`kb_lib/config.py` 加默认值 + 字符串转 int；`kb_lib/routes/routes_admin.py` 加 int_keys 与可写白名单；`scripts/web/app.js` 加设置项字段
-- **验证（生产 远程服务器 实测）**：① 三态对比 A(关)→B(90)→C(关)，A==C 完全一致（可逆、无残留），A≠B 的查询 5/5 全部生效；② 例：「代理」查询下 2 天/4 天新笔记从第 5、6 位升到第 1、2 位，73 天老笔记从第 1 位降到第 6 位；③ 设置项手动改 30/365/0 均读回正确，非法值 `abc` 回落 90；④ 重启后持久化正常；⑤ `/health` indexed 1653 / stale 0 / version 5.9.3
+- **验证（生产 远程服务器 实测）**：① 三态对比 A(关)→B(90)→C(关)，A==C 完全一致（可逆、无残留），A≠B 的查询 5/5 全部生效；② 例：「代理」查询下 2 天/4 天新笔记从第 5、6 位升到第 1、2 位，73 天老笔记从第 1 位降到第 6 位；③ 设置项手动改 30/365/0 均读回正确，非法值 `abc` 回落 90；④ 重启后持久化正常；⑤ `/health` indexed N / stale 0 / version 5.9.3
 - **回滚**：`kb_lib/search.py` / `config.py` / `routes/routes_admin.py` / `scripts/web/app.js` 四文件，备份在 远程服务器 `~/归档-20261016/备份-远程服务器/kb-search-config-web-20261016-171856.tar.gz`；设置文件备份 `.kb_settings.json.bak-t4-20261016`。回滚 = 还原四文件 + 重启 `kb-server`
 
 ## 未发布（克隆库 Goal 迭代开发中，本批已随上文部署上线）
@@ -1594,7 +1594,7 @@ $ python3 -m pytest tests/ -q
 
 - `kb_note_hygiene.py`：`scan()` 282 行巨函数拆为「`_collect_files` 收集 + 11 个 `_check_*` 检测 + scan 编排（132–160 行）」，438 → 467 行；`scan(notes_dir) -> dict` 签名与返回结构不变，MCP 工具与 20 个现有用例无感
 - 11 个检测函数按原编号顺序提取：`_check_exact_duplicates`(164) `_check_same_basename`(183) `_check_near_duplicates`(226) `_check_empty_shells`(257) `_check_skill_dumps`(277) `_check_archive_root_litter`(294) `_check_forbidden_paths`(310) `_check_project_dir_forks`(326) `_check_test_junk`(356) `_check_nested_top_dirs`(376) `_check_duplicate_h1`(404)
-- 行为零变化经三方实测：git 原始版 before、拆分后 after、总控终版 after 对克隆库 900 篇扫描的 summary 与 issues 完全一致；hygiene 20 用例 + 全量 172 全绿；本轮未加新测试（纯重构无新行为），11 个检测函数成为后续逐项补单测的挂点
+- 行为零变化经三方实测：git 原始版 before、拆分后 after、总控终版 after 对克隆库千级篇扫描的 summary 与 issues 完全一致；hygiene 20 用例 + 全量 172 全绿；本轮未加新测试（纯重构无新行为），11 个检测函数成为后续逐项补单测的挂点
 - **B2 第二批（e159ad8 / 155bf1b / f587891，测试 172→196）**：`routes_admin.scan_new` 216 行→14 函数薄编排（25 场景新旧对跑零差异+冒烟用例）；`write_policy.validate_write_hygiene` 154 行→9 守卫（15600 例对等 0 差异+12 新用例）；`search.build_embeddings_incremental` 103 + `incremental_refresh` 95 双函数拆分；`graph.compute_graph` 93 行→34 编排+8 私有函数（黄金基线五路径逐字节一致+2 契约用例）；`routes_llm.smart_upload_auto` 155 行→22 编排+7 helper（首代理失败重派，全量 196 绿）。routes_notes.create_note 111 行划归并行线（U2 会话在改该文件），search.load 91 行第三批拆
 
 ### 仓库清理（B5，2026-10-08）
@@ -1605,7 +1605,7 @@ $ python3 -m pytest tests/ -q
 
 ### 界面与使用体验（U2，2026-10-08）
 
-**真缺陷（现测，非旧计划描述）**：侧边栏笔记树只覆盖约 12% 的笔记库。`/notes` 的 limit 被硬裁剪到 200（`lim = min(int(...), 200)`），而前端 `lt()` 用 `/notes?limit=200` 拉数后在客户端 JS 构树，1589 篇里只有 200 篇进树；且 `rT()` 递归渲染无任何折叠控制，目录全部铺平展开。**开工单「需 /api/notes/tree 接口」的说法不准确**——前端本就在客户端构树，缺的是「后端全量数据源 + 折叠交互」。
+**真缺陷（现测，非旧计划描述）**：侧边栏笔记树只覆盖约 12% 的笔记库。`/notes` 的 limit 被硬裁剪到 200（`lim = min(int(...), 200)`），而前端 `lt()` 用 `/notes?limit=200` 拉数后在客户端 JS 构树，千级篇里只有 200 篇进树；且 `rT()` 递归渲染无任何折叠控制，目录全部铺平展开。**开工单「需 /api/notes/tree 接口」的说法不准确**——前端本就在客户端构树，缺的是「后端全量数据源 + 折叠交互」。
 
 - `kb_lib/routes/routes_notes.py`：新增 `GET /api/notes/tree`（`api_notes_tree`，紧贴 `list_notes` 之后，纯新增 16 行）。复用 `_get_all_notes()` 的缓存全量列表，`dict(info)` 浅拷贝后 pop `_full_path`（不污染缓存原对象，比 `list_notes` 的原位 pop 更安全），返回 `{count,total,items}`；不读 `request.args`，传 `?limit=1&offset=999` 也全量返回。零新 import，对现有路由零改动
 - `web/app.js`：`lt()` 数据源 `/notes?limit=200` → `/api/notes/tree`（构树/分组/统计逻辑一行未动）；`rT(n,d,ht)` → `rT(n,d,ht,fe)`，目录头加 `nt-hd` / `cursor-pointer hover:bg-gray-100 rounded px-2` / ▸▾ 箭头 / `onclick="ntToggle(this)"`，子树包 `<div class="nt-body[ hidden]" [data-lz]>`；新增 `_ntLazy` 懒渲染登记表与 `ntToggle(el)`——**d==0 根层或过滤态立即渲染，更深层默认折叠且连 DOM 都不生成，首次展开时才补渲染子树**；`_f` 文件行分支（batch-check / bcToggle / rn / 类型图标 / esc / jss）一字未动
@@ -1614,8 +1614,8 @@ $ python3 -m pytest tests/ -q
 **验证（克隆库 3.11 + 本地实例 systemd-run 限额实测）**：
 
 - `tests/test_notes_tree.py` 8 新用例：全量不被 limit 截断、`count==total`、`_full_path` 不外泄、浅拷贝不改缓存原对象、无 token 401、排除路径口径（`is_excluded_path` 默认 `exclude_archived=False`，50-档案 不在默认排除集，树与 list_notes 口径一致）；全量 **181 passed**（含并行线 `test_scan_new_smoke.py` 1 例）
-- 本地实例（`127.0.0.1:18900`）实测 `/api/notes/tree`：HTTP 200、**900 篇**、750KB、0.62s、`_full_path` 不泄漏；`/health` stale=0，`.search_index.pkl` / `.faiss.index` / `.embeddings.npy` mtime 均未变（**未触发 refresh/rebuild，CF 嵌入额度零消耗**）
-- 独立 harness（Node `vm` 加载真实 app.js + 真实 900 篇响应，21 断言全过）：首屏只渲染 127 个文件行、125 个深层目录登记懒渲染并折叠、4 个根层展开；首屏 387 个 div（若全展开约 5528）；过滤输入有内容时整树强制全展开（952 命中，无 `hidden` / `data-lz` 残留）；点击展开正确注销登记并补渲染子树；恶意目录名 `<img src=x onerror=...>` 与恶意标题 `<script>` 均经 esc 转义
+- 本地实例（`127.0.0.1:18900`）实测 `/api/notes/tree`：HTTP 200、**千级篇**、数百 KB、0.62s、`_full_path` 不泄漏；`/health` stale=0，`.search_index.pkl` / `.faiss.index` / `.embeddings.npy` mtime 均未变（**未触发 refresh/rebuild，CF 嵌入额度零消耗**）
+- 独立 harness（Node `vm` 加载真实 app.js + 真实千级篇响应，21 断言全过）：首屏只渲染 127 个文件行、125 个深层目录登记懒渲染并折叠、4 个根层展开；首屏 387 个 div（若全展开约 5528）；过滤输入有内容时整树强制全展开（952 命中，无 `hidden` / `data-lz` 残留）；点击展开正确注销登记并补渲染子树；恶意目录名 `<img src=x onerror=...>` 与恶意标题 `<script>` 均经 esc 转义
 
 **已知取舍**：`📁 项目` 组沿用原有 `ht&&d==0` 直通语义，其下一层目录渲染在 d==1，按折叠规则默认收起，需点一下才展开（`📚 知识笔记` 根层默认展开）。项目数远小于知识笔记数，收起可避免面板过长。
 
@@ -1648,8 +1648,8 @@ $ python3 -m pytest tests/ -q
 
 ### 文档口径对齐
 
-- 主档 `笔记/10-项目/知识库项目.md`「数据状态」按 2026-10-07 实测刷新：indexed 1414（`/api/index/status`，三产物一致）、标签 3329、磁盘 .md 1648，并补「索引数 ≠ 磁盘 md 数」的口径说明（排除 50-档案 203 / 60-梦境 21 / 00-索引 5 / _模板 4 / _assets 2，共 235）
-- `.dev_progress.json`：版本 5.9.2 → 5.9.3，统计刷新（indexed 1414、notes_total 1648）
+- 主档 `笔记/10-项目/知识库项目.md`「数据状态」按 2026-10-07 实测刷新：indexed N（`/api/index/status`，三产物一致）、标签 N、磁盘 .md N，并补「索引数 ≠ 磁盘 md 数」的口径说明（排除 50-档案 / 60-梦境 / 00-索引 / _模板 / _assets 若干）
+- `.dev_progress.json`：版本 5.9.2 → 5.9.3，统计刷新（indexed N、notes_total N）
 
 ### 调度与监控
 

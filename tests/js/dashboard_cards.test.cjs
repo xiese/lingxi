@@ -77,21 +77,20 @@ function runInSandbox(ctx, code) {
   );
 }
 
-/** 生产 远程服务器 的真实口径样本（2026-10-18 实测）。
+/** 看板卡片的夹具样本（数字是构造值，不代表任何实例的真实规模）。
  *
- * 项目主数字取 66 而非 67：`ls -d 10-项目/* /` 得 67，其中 `_assets` 按维护者定稿
- * 「排除 . 与 _ 开头」被后端剔除，故后端真实返回 66。测试必须锁代码实际会产出的
- * 数字，锁 67 就是自欺（双模型审查已指出过这个坑）。
+ * 项目主数字比目录总数少 1：`_assets` 按维护者定稿「排除 . 与 _ 开头」被后端剔除。
+ * 测试锁的是「代码实际会产出的数字」，不是目录总数 —— 锁错就是自欺。
  */
 const REAL = {
-  projects: 66, knowledge: 60, writing: 0, records: 0, diaries: 0, archived: 13,
-  projects_notes: 723, knowledge_notes: 927, writing_notes: 0, records_notes: 11,
-  diaries_notes: 0, archived_notes: 309,
-  total: 1970, total_dirs: 139,
+  projects: 6, knowledge: 6, writing: 0, records: 0, diaries: 0, archived: 3,
+  projects_notes: 23, knowledge_notes: 27, writing_notes: 0, records_notes: 11,
+  diaries_notes: 0, archived_notes: 29,
+  total: 90, total_dirs: 15,
   dir_fallback: { projects: false, knowledge: false, writing: true, records: true, diaries: true, archived: false }
 };
-// 自检：total 必须等于六类篇数之和（723+927+0+11+0+309=1970）。
-// 上一版 fixture 分项加起来 2071 却写 total 1970，被 glm 审查判为「凑绿」——
+// 自检：total 必须等于六类篇数之和（23+27+0+11+0+29=90）。
+// 上一版 fixture 分项之和与 total 对不上，被审查判为「凑绿」——
 // 这里把这条约束写成断言，谁再手改数字都会被当场拦下。
 if (REAL.projects_notes + REAL.knowledge_notes + REAL.writing_notes +
     REAL.records_notes + REAL.diaries_notes + REAL.archived_notes !== REAL.total) {
@@ -111,13 +110,13 @@ test('总览六卡：主数字取目录数，小字一律是「篇笔记」', as
   const notesHits = (html.match(/篇笔记/g) || []).length;
   assert.ok(notesHits >= 6, '六张卡应都有「篇笔记」小字，实际命中 ' + notesHits);
 
-  // ② 项目卡主数字 = 目录数 67，小字 = 746 篇
-  assert.ok(/text-3xl font-bold text-blue-600">66</.test(html), '项目主数字应为 66（一级目录数，已排除 _assets）');
-  assert.ok(/723 篇笔记/.test(html), '项目小字应为「723 篇笔记」');
+  // ② 项目卡主数字 = 目录数，小字 = 篇数
+  assert.ok(/text-3xl font-bold text-blue-600">6</.test(html), '项目主数字应为 6（一级目录数，已排除 _assets）');
+  assert.ok(/23 篇笔记/.test(html), '项目小字应为「23 篇笔记」');
 
   // ③ 总计卡主数字 = 目录合计，小字 = 篇数合计
-  assert.ok(/text-rose-600">139</.test(html), '总计主数字应为 139（目录合计）');
-  assert.ok(/1970 篇笔记/.test(html), '总计小字应为「1970 篇笔记」');
+  assert.ok(/text-rose-600">15</.test(html), '总计主数字应为 15（目录合计）');
+  assert.ok(/90 篇笔记/.test(html), '总计小字应为「90 篇笔记」');
 
   // ④ 无子目录的分类退化为篇数并注明
   assert.ok(/无子目录，按篇数显示/.test(html), 'writing/records/diaries 应走退化分支并注明');

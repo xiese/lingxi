@@ -649,7 +649,7 @@ def _smart_upload_write_note(target, d, title, body, ntype, tags, defaults, dedu
         kind=(norm or {}).get("kind") or None,
     )
     # 2026-09-26：与 routes_notes.py 同一处缺陷——正文自带一级标题时不再重复插入，
-    # 否则反复保存会堆出多个标题（全库曾累积到 833 篇双标题）。
+    # 否则反复保存会堆出多个标题（全库曾累积到数百篇双标题）。
     # 2026-10-05：插入的标题用 sanitize_title(title)，避免原标题里的 \r \n
     # 随 `# {title}` 进入正文、在文件里留下控制符。
     _body = body or ""

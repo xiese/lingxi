@@ -38,19 +38,19 @@ for (const fn of ['lgPrune', 'lgStat', 'lgOpts', 'lgQuery']) {
   vm.runInContext(grab(fn), sandbox, {filename: fn + '.js'});
 }
 
-// 造一个与生产同规模的图：2015 节点 / 740 边（wiki 99 + 语义 641）
+// 造一个与生产同形态的图：300 节点 / 120 边（wiki 99 + 语义 21）
 function makeGraph() {
   const nodes = [];
-  for (let i = 0; i < 2015; i++) nodes.push({id: 'n' + i, degree: i % 37});
+  for (let i = 0; i < 300; i++) nodes.push({id: 'n' + i, degree: i % 37});
   const links = [];
-  for (let i = 0; i < 740; i++) {
+  for (let i = 0; i < 120; i++) {
     links.push({
-      source: 'n' + (i % 2015),
-      target: 'n' + ((i * 7 + 3) % 2015),
+      source: 'n' + (i % 300),
+      target: 'n' + ((i * 7 + 3) % 300),
       type: i < 99 ? 'wiki' : 'semantic'
     });
   }
-  return {nodes, links, meta: {node_count: 2015, link_count: 740}};
+  return {nodes, links, meta: {node_count: 300, link_count: 120}};
 }
 
 let pass = 0, fail = 0;
@@ -60,7 +60,7 @@ function t(name, fn) {
 }
 
 t('裁剪优先保留有边节点：孤立点不能挤掉有连线的节点', () => {
-  // 生产实测：2015 节点里 1899 个 degree=0。若纯按 degree 排序取前 150，
+  // 真实形态：绝大多数节点 degree=0。若纯按 degree 排序取前 150，
   // 会混进 34 个孤立散点；应先把有边节点全留下，再用孤立点补足。
   const nodes = [];
   for (let i = 0; i < 50; i++) nodes.push({ id: 'iso' + i, title: '孤' + i, degree: 0 });
@@ -88,7 +88,7 @@ t('默认参数真的能裁到 150 个节点', () => {
   const o = sandbox.lgOpts({});
   const p = sandbox.lgPrune(g, o.cap, o.showAll);
   assert.strictEqual(p.nodes.length, 150, '实际裁到 ' + p.nodes.length);
-  assert.strictEqual(p.total, 2015);
+  assert.strictEqual(p.total, 300);
   assert.strictEqual(p.capped, true);
 });
 
@@ -103,11 +103,11 @@ t('裁剪后每条边的两端都还在保留集里', () => {
   }
 });
 
-t('显示全部时原样返回 2015 个节点', () => {
+t('显示全部时原样返回全部 300 个节点', () => {
   const g = makeGraph();
   const o = sandbox.lgOpts({all: true});
   const p = sandbox.lgPrune(g, o.cap, o.showAll);
-  assert.strictEqual(p.nodes.length, 2015);
+  assert.strictEqual(p.nodes.length, 300);
   assert.strictEqual(p.capped, false);
 });
 

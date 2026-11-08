@@ -18,14 +18,14 @@ sys.path.insert(0, str(SCRIPTS))
 import update_stats as us  # noqa: E402
 
 API_RESPONSES = {
-    "/health": {"indexed": 1413, "stale": 1, "version": "5.9.3", "jieba": True},
-    "/api/index/status": {"indexed": 1414},
+    "/health": {"indexed": 113, "stale": 1, "version": "5.9.3", "jieba": True},
+    "/api/index/status": {"indexed": 114},
     "/dashboard": {
-        "total": 1580, "projects": 574, "knowledge": 797,
+        "total": 280, "projects": 574, "knowledge": 797,
         "writing": 0, "diaries": 0, "archived": 199,
     },
-    "/api/tags": {"total": 3329},
-    "/notes?limit=1": {"total": 1580},
+    "/api/tags": {"total": 332},
+    "/notes?limit=1": {"total": 280},
 }
 
 
@@ -56,7 +56,7 @@ def kb(tmp_path, monkeypatch):
     proj = notes / "10-项目" / "知识库项目.md"
     proj.write_text(
         "---\ntitle: 知识库项目\nupdated: 2026-08-18 15:19\n---\n\n"
-        "## 数据状态\n\n- indexed: 620, stale: 0\n\n## 文档路径约定\n\n内容\n",
+        "## 数据状态\n\n- indexed: 62, stale: 0\n\n## 文档路径约定\n\n内容\n",
         encoding="utf-8",
     )
 
@@ -67,7 +67,7 @@ def kb(tmp_path, monkeypatch):
         "next": "持续维护",
         "created": "2026-06-30",
         "updated": "2026-07-11 10:58",
-        "stats": {"indexed": 124, "notes_total": 70, "stale": 0},
+        "stats": {"indexed": 12, "notes_total": 70, "stale": 0},
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     monkeypatch.setattr(us, "KB_ROOT", root)
@@ -83,9 +83,9 @@ def kb(tmp_path, monkeypatch):
 
 def test_get_dashboard_stats_prefers_index_status(kb, monkeypatch):
     stats = us.get_dashboard_stats()
-    assert stats["indexed"] == 1414          # 鉴权口径优先
-    assert stats["total_md"] == 1580          # dashboard.total
-    assert stats["tags"] == 3329
+    assert stats["indexed"] == 114           # 鉴权口径优先
+    assert stats["total_md"] == 280          # dashboard.total
+    assert stats["tags"] == 332
     assert stats["projects"] == 574 and stats["knowledge"] == 797
     assert stats["archived"] == 199 and stats["diaries"] == 0
     assert stats["stale"] == 1 and stats["version"] == "5.9.3"
@@ -98,17 +98,17 @@ def test_get_dashboard_stats_falls_back_to_health(kb, monkeypatch):
     responses.pop("/api/index/status")
     monkeypatch.setattr(us, "api_get", fake_api(responses))
     stats = us.get_dashboard_stats()
-    assert stats["indexed"] == 1413          # /health 口径
+    assert stats["indexed"] == 113           # /health 口径
 
 
 def test_excluded_counts_filtered_away(kb, monkeypatch):
     responses = dict(API_RESPONSES)
-    responses["/notes?limit=1"] = {"total": 1500}
+    responses["/notes?limit=1"] = {"total": 200}
     monkeypatch.setattr(us, "api_get", fake_api(responses))
     stats = us.get_dashboard_stats()
-    assert stats["filtered"] == 1500
+    assert stats["filtered"] == 200
     assert stats["excluded"] == 80
-    assert stats["not_indexed"] == 86        # 1500 - 1414
+    assert stats["not_indexed"] == 86        # 200 - 114
 
 
 # ── 三个统计目标 ──
@@ -124,19 +124,19 @@ def test_three_targets_consistent(kb):
 
     readme = (kb / "README.md").read_text(encoding="utf-8")
     assert "## 统计" in readme
-    assert "笔记总数：1580 篇（索引 1414 篇，文件系统 5 篇含 README/模板/隐藏文件）" in readme
-    assert "标签数：3329" in readme
+    assert "笔记总数：280 篇（索引 114 篇，文件系统 5 篇含 README/模板/隐藏文件）" in readme
+    assert "标签数：332" in readme
     assert "stale=1" in readme
 
     proj = (us.PROJECT_NOTE).read_text(encoding="utf-8")
-    assert "- indexed: 1414, stale: 1, jieba: ON" in proj
-    assert "仪表盘可见笔记: 1580；文件系统 .md: 5" in proj
+    assert "- indexed: 114, stale: 1, jieba: ON" in proj
+    assert "仪表盘可见笔记: 280；文件系统 .md: 5" in proj
     assert "服务版本: 5.9.3" in proj
     assert "updated: " in proj
 
     dev = json.loads((kb / ".dev_progress.json").read_text(encoding="utf-8"))
     assert dev["stats"] == {
-        "indexed": 1414, "notes_total": 1580, "stale": 1,
+        "indexed": 114, "notes_total": 280, "stale": 1,
         "service": "running", "jieba": True,
     }
     # 只改统计相关字段，业务字段原样保留
@@ -150,7 +150,7 @@ def test_three_targets_consistent(kb):
 def test_readme_inserts_missing_stats_section(kb):
     """根 README 被 auto-commit 覆盖丢统计段时必须能自救（2026-10-07 停摆根因）。"""
     stats = us.get_dashboard_stats()
-    stats["total_on_disk"] = 1649
+    stats["total_on_disk"] = 164
     assert "## 统计" not in (kb / "README.md").read_text(encoding="utf-8")
     assert us.update_readme(stats) is True
     text = (kb / "README.md").read_text(encoding="utf-8")
@@ -158,24 +158,24 @@ def test_readme_inserts_missing_stats_section(kb):
     # 插到「## 文档」之前，且原文其他段完好
     assert text.index("## 统计") < text.index("## 文档")
     assert "## 特性" in text
-    assert "笔记总数：1580 篇（索引 1414 篇，文件系统 1649 篇含 README/模板/隐藏文件）" in text
+    assert "笔记总数：280 篇（索引 114 篇，文件系统 164 篇含 README/模板/隐藏文件）" in text
 
 
 def test_readme_replaces_existing_stats_section(kb, monkeypatch):
     root = kb
     readme = root / "README.md"
     readme.write_text(
-        "# 知识库\n\n## 统计\n\n- 笔记总数：620 篇（索引 620 篇，文件系统 768 篇）\n"
-        "- 标签数：1462\n\n## 文档\n\n- y\n",
+        "# 知识库\n\n## 统计\n\n- 笔记总数：62 篇（索引 62 篇，文件系统 76 篇）\n"
+        "- 标签数：146\n\n## 文档\n\n- y\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(us, "README_PATH", readme)
     stats = us.get_dashboard_stats()
-    stats["total_on_disk"] = 1649
+    stats["total_on_disk"] = 164
     assert us.update_readme(stats) is True
     text = readme.read_text(encoding="utf-8")
-    assert "620 篇" not in text
-    assert "1414 篇" in text
+    assert "62 篇" not in text
+    assert "114 篇" in text
     assert text.count("## 统计") == 1
 
 
@@ -198,8 +198,8 @@ def test_dev_progress_rebuilds_when_corrupt(kb, tmp_path, monkeypatch):
     stats = us.get_dashboard_stats()
     assert us.update_dev_progress(stats) is True
     data = json.loads(dev.read_text(encoding="utf-8"))
-    assert data["stats"]["indexed"] == 1414
-    assert data["stats"]["notes_total"] == 1580
+    assert data["stats"]["indexed"] == 114
+    assert data["stats"]["notes_total"] == 280
     assert data["updated"]
 
 

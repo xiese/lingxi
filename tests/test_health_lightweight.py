@@ -2,7 +2,7 @@
 
 背景（2026-10-18 待办第 18 项）：
     生产机内存紧张（available 373M、swap 已用 1872M），冷启动后第一次访问
-    /health 会卡住。实测 count_stale 本身只要 0.023s（2058 篇），不是它慢，
+    /health 会卡住。实测 count_stale 本身只要 0.023s（千级篇），不是它慢，
     而是冷启动时进程页要从 swap 换回物理内存，任何重活都会放大这个代价。
 
 修法：/health 只读 15s 缓存（peek_stale），未命中返回 stale=null + 起后台线程
@@ -156,10 +156,10 @@ def health_client(monkeypatch):
     # 不 reload：蓝图已在 import 时注册到 bp，reload 会重复注册端点导致 Flask 报错。
     # 只需替换模块级 search_index 引用即可。
 
-    # 伪造索引：有 bm25、2058 篇
+    # 伪造索引：有 bm25、若干篇
     fake_index = types.SimpleNamespace()
     fake_index.bm25 = object()
-    fake_index.paths = [f"p{i}.md" for i in range(2058)]
+    fake_index.paths = [f"p{i}.md" for i in range(58)]
 
     scan = {"n": 0, "threads": []}
 
@@ -200,7 +200,7 @@ def test_health_冷启动不扫盘且返回null(health_client):
     assert "stale_cached" in data, "/health 必须显式返回 stale_cached 字段"
     assert data["stale"] is None, "冷启动 stale 必须是 null，不能是 0"
     assert data["stale_cached"] is False, "冷启动必须明确告诉调用方「未预热」"
-    assert data["indexed"] == 2058
+    assert data["indexed"] == 58
     assert elapsed < 0.5, f"/health 不该卡，实测 {elapsed:.3f}s"
     # 扫描可以发生，但必须在后台线程里；请求线程自己扫才是「卡」的根因
     import threading

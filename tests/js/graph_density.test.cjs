@@ -2,7 +2,7 @@
  * 遗留 #16「知识图谱去蜘蛛网化」的密度验收（2026-10-19）。
  *
  * 为什么要有这条：graph_prune 只证明「能裁」，没证明「裁完是不是一张网」。
- * 生产实测 2028 节点 / 4617 条边里 4518 条是语义边（98%），画出来就是蜘蛛网。
+ * 真实形态：节点与边极多，其中绝大多数是语义边（约 98%），画出来就是蜘蛛网。
  * 这条测试用真实生产的形态当输入，断言三件事：
  *   1. 裁完的节点数受控（默认 150）；
  *   2. 裁完的平均度落在可读区间（≤6），超过就是网；
@@ -36,10 +36,10 @@ for (const fn of ['lgPrune', 'lgStat', 'lgOpts', 'lgQuery', 'lgCap', 'lgEdgeCap'
   vm.runInContext(grab(fn), sandbox, {filename: fn + '.js'});
 }
 
-// 按生产形态造图：2028 节点里 129 个有边、1899 个孤立点；边 4617 条（含大量语义边）
+// 按生产形态造图：200 节点里 20 个有边、180 个孤立点；边 300 条（含大量语义边）
 function prodLikeGraph() {
   const nodes = [], links = [];
-  const linked = 129, isolated = 1899;
+  const linked = 20, isolated = 180;
   for (let i = 0; i < linked; i++) nodes.push({id: 'n' + i, degree: 0, label: '节点' + i});
   for (let i = 0; i < isolated; i++) nodes.push({id: 'z' + i, degree: 0, label: '散点' + i});
   // 语义边按 max_links=8 的上限铺：每个有边节点连到若干邻居
@@ -50,8 +50,8 @@ function prodLikeGraph() {
       links.push({source: 'n' + i, target: 'n' + j, type: 'semantic', weight: 0.8});
     }
   }
-  // wiki 边 99 条
-  for (let i = 0; i < 99; i++) {
+  // wiki 边 19 条
+  for (let i = 0; i < 19; i++) {
     links.push({source: 'n' + (i % linked), target: 'n' + ((i + 3) % linked), type: 'wiki', weight: 1});
   }
   const deg = {};
@@ -79,11 +79,11 @@ assert.ok(pr.capped, 'capped 标记必须为真');
 // 3) 孤立点不占位：有边节点全保留，剩余名额才给散点
 const keptLinked = pr.nodes.filter(n => n.id.startsWith('n')).length;
 const keptIso = pr.nodes.filter(n => n.id.startsWith('z')).length;
-assert.strictEqual(keptLinked, 129, '有边的节点必须全部保留，不能被散点挤掉');
-assert.strictEqual(keptIso, 150 - 129, '剩余名额才补散点');
+assert.strictEqual(keptLinked, 20, '有边的节点必须全部保留，不能被散点挤掉');
+assert.strictEqual(keptIso, 150 - 20, '剩余名额才补散点');
 
 // 3b) 人工双链优先（遗留 #16）：带 wiki 边的节点必须先于纯语义节点保住。
-// 生产实测：116 个带 wiki 的节点，按 degree 排序只挤进 1 个 —— 那是缺陷。
+// 真实形态：带 wiki 的节点度数普遍低，按 degree 排序几乎挤不进去 —— 那是缺陷。
 {
   const nodes = [], links = [];
   // 5 个 wiki 节点，度数很低；200 个语义节点，度数很高
@@ -125,7 +125,7 @@ for (const k in cnt) {
 // wiki 边优先：只要 wiki 边不超过上限，必须全部保住
 const wikiIn = pr.links.filter(l => l.type === 'wiki').length;
 const wikiOut = capped.filter(l => l.type === 'wiki').length;
-assert.strictEqual(wikiOut, Math.min(wikiIn, 99), 'wiki 边必须优先于语义边保留');
+assert.strictEqual(wikiOut, Math.min(wikiIn, 19), 'wiki 边必须优先于语义边保留');
 
 // 6) 语义边默认不请求：去蜘蛛网的第一道闸
 const q = sandbox.lgQuery({});

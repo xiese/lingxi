@@ -1,4 +1,4 @@
-"""GET /api/notes/tree 全量笔记树接口测试（侧边栏 1652 篇只有约 200 篇入树的问题修复）。
+"""GET /api/notes/tree 全量笔记树接口测试（侧边栏只丢约 200 篇入树的问题修复）。
 
 背景：list_notes 的 limit 被硬裁剪到 200，前端侧边栏只能拿到约 12% 的笔记。
 新接口 /api/notes/tree 复用 _get_all_notes() 的缓存全量列表，不做任何分页。
