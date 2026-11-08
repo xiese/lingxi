@@ -144,6 +144,24 @@ def start_background():
     # 后台启动索引加载（load → 缺失则 build → 增量刷新 + 5 分钟周期刷新）
     threading.Thread(target=_init_index, daemon=True, name="kb-index-init").start()
 
+    # 启动自愈（1.0.21）：向量面若不可用（embeddings 与 paths 不一致 / 从没建过），
+    # 由后台分片重建补齐 —— 不再等「下一次写入」去触发（那会把这次写入拖到分钟级）。
+    def _vector_face_selfheal():
+        time.sleep(20)          # 等 _init_index 把索引加载完
+        try:
+            from .config import get_setting
+            from .search import search_index
+            if get_setting("embedding_type") != "llm":
+                return
+            if not search_index.is_vector_search_ready():
+                log.info("启动自检：向量面不可用，起后台分片重建")
+                search_index._schedule_embed_rebuild()
+        except Exception:
+            log.warning("启动自检向量面失败", exc_info=True)
+
+    threading.Thread(target=_vector_face_selfheal, daemon=True,
+                     name="kb-vector-selfheal").start()
+
     # Token 过期清理循环
     threading.Thread(target=cleanup_loop, daemon=True, name="kb-token-cleanup").start()
 

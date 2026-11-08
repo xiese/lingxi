@@ -26,6 +26,9 @@ log = logging.getLogger("kb.search")
 
 # ── 全量重建进度跟踪（后台异步重建 + 进度查询）──
 _progress_lock = threading.Lock()
+# 全量嵌入的分片重建线程（全局单例：任何时刻只跑一个，避免几路写入同时起重建）
+_embed_rebuild_lock = threading.Lock()
+_embed_rebuild_thread = None
 _rebuild_running = False          # 模块级互斥标志：后台全量重建进行中
 _rebuild_thread = None
 _rebuild_progress = {
@@ -1191,42 +1194,151 @@ class SearchIndex:
         except Exception:
             log.warning("FAISS IndexIDMap 升级失败，保留原索引", exc_info=True)
 
-    def build_embeddings(self):
+    # ── 全量嵌入的断点与分片重建（1.0.21）──
+    # 断点文件从 EMBEDDINGS_FILE 派生（测试里 patch 一个常量即可隔离）。
+    def _embed_ckpt_meta_path(self):
+        return Path(str(EMBEDDINGS_FILE) + ".ckpt.json")
+
+    def _embed_ckpt_vecs_path(self):
+        return Path(str(EMBEDDINGS_FILE) + ".ckpt.npy")
+
+    def _embed_ckpt_load(self):
+        """读断点 → (paths, vecs)；没有或读坏了返回 (None, None)。"""
+        mp, vp = self._embed_ckpt_meta_path(), self._embed_ckpt_vecs_path()
+        if not mp.exists() or not vp.exists():
+            return None, None
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+            arr = np.load(str(vp), allow_pickle=False)
+            return list(meta.get("paths") or []), arr
+        except Exception:
+            log.warning("嵌入断点读取失败，忽略", exc_info=True)
+            return None, None
+
+    def _embed_ckpt_save(self, paths, vecs):
+        try:
+            _n = int(vecs.shape[0]) if vecs is not None else 0
+            # 只记「已经算出来」的那一段：paths 与 vecs 必须逐行对齐，
+            # 否则续跑时长度一比对不上，整份断点会被判为无效而白白重算。
+            paths = list(paths)[:_n]
+            _atomic_np_save(self._embed_ckpt_vecs_path(), vecs)
+            mp = self._embed_ckpt_meta_path()
+            tmp = Path(str(mp) + ".tmp")
+            tmp.write_text(json.dumps(
+                {"paths": paths, "n": _n, "index_version": self._index_version},
+                ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, mp)
+        except Exception:
+            log.warning("嵌入断点写入失败", exc_info=True)
+
+    def _embed_ckpt_clear(self):
+        for f in (self._embed_ckpt_meta_path(), self._embed_ckpt_vecs_path()):
+            try:
+                if f.exists():
+                    f.unlink()
+            except OSError:
+                pass
+
+    def _schedule_embed_rebuild(self, chunk_budget=60.0):
+        """标记向量面待重建，并（若没在跑）起一个后台分片重建线程。
+
+        写入路径只调它，不再自己跑全量 —— 这是「写入卡 7 分钟」的根治点。
+        返回 True = 本次真的起了线程。
+        """
+        global _embed_rebuild_thread
+        with _embed_rebuild_lock:
+            if _embed_rebuild_thread is not None and _embed_rebuild_thread.is_alive():
+                return False
+            t = threading.Thread(target=self._run_embed_rebuild_chunks,
+                                 args=(chunk_budget,), daemon=True,
+                                 name="kb-embed-chunks")
+            _embed_rebuild_thread = t
+            t.start()
+            return True
+
+    def _run_embed_rebuild_chunks(self, chunk_budget=60.0):
+        """后台按片推进全量嵌入，直到向量面与 paths 对齐；片间让出 CPU。"""
+        try:
+            while True:
+                if self.embeddings is not None and \
+                        int(self.embeddings.shape[0]) == len(self.paths or []):
+                    return
+                if not self.contents:
+                    return
+                if self.build_embeddings(budget=chunk_budget):
+                    log.info("后台分片重建完成：%d 篇向量已对齐", len(self.paths or []))
+                    return
+                time.sleep(0.5)
+        except Exception:
+            log.warning("后台分片重建异常", exc_info=True)
+
+    def build_embeddings(self, budget=None, use_checkpoint=True):
+        """全量算所有正文的向量并落盘。**支持断点续跑**（1.0.21）。
+
+        budget：本轮时间预算（秒）。None = 不限。超预算**不算失败** ——
+                保存断点后返回 False，由调用方稍后接着推进（跟旧版的区别：
+                旧版超预算会把 embeddings 置空并回滚，等于每轮从头再来）。
+        use_checkpoint：是否复用/写断点文件。
+
+        返回 True = 向量面已与 paths 对齐并落盘；False = 本轮没做完（有断点）或
+        paths 在计算期间变了（结果已丢弃，断点保留待续）。
+
+        背景（2026-11-08 排障）：全量嵌入常态要 20+ 分钟，而写入路径曾在 self.lock
+        内调本函数、还给它 300s 硬预算 → 每轮都超时回滚、向量面永远补不上，
+        写入被拖到 7 分钟。现在写入路径不再调它（见 `_schedule_embed_rebuild`），
+        本函数的预算只用来「切分片」，不再用于「放弃」。
+        """
         if not self.contents:
-            return
+            return False
         try:
             batch_size = 16
             _total = len(self.contents)
             _progress_set_total(_total)
+            paths = list(self.paths or [])
+            # 1) 断点复用：取与当前 paths 的最长公共前缀。
+            #    新笔记通常追加在尾部、原地改写不改变顺序，所以前缀命中率高；
+            #    顺序一旦变化（删中间的文件）就只复用变化点之前的部分，绝不会张冠李戴。
             all_embeds = []
-            # 2026-10-31：单轮全量嵌入总时间预算（秒），要调整只改这一行。
-            # 本函数在 incremental_refresh 的 self.lock 内被调用（见
-            # _apply_incremental_docs_locked），而 embedding_api 是网络调用，
-            # 单批预算 90 秒（embed.py 的 _HTTP_CALL_BUDGET）。上游变慢时
-            # 124 批 x 90 秒 约 3.1 小时全程持锁，检索全线超时、服务假死
-            # （2026-10-31 16:24 实测：waitress 队列积压到 53 层）。
-            # 正常时 124 批约 40 秒，300 秒留约 7 倍余量。
-            # 超预算即中止本轮，并把 embeddings 置空以强制对齐校验失败，
-            # 由调用方回滚到刷新前快照，下次刷新重试。
-            _full_embed_budget = 300.0
+            start = 0
+            if use_checkpoint:
+                ck_paths, ck_vecs = self._embed_ckpt_load()
+                if ck_paths and ck_vecs is not None and int(ck_vecs.shape[0]) == len(ck_paths):
+                    n = 0
+                    lim = min(len(ck_paths), len(paths))
+                    while n < lim and ck_paths[n] == paths[n]:
+                        n += 1
+                    if n:
+                        all_embeds.append(ck_vecs[:n])
+                        start = n
+                        log.info("嵌入断点复用 %d/%d 行，从第 %d 行继续", n, _total, n)
+            # 2) 从 start 继续往后算
             _t0 = time.monotonic()
-            for i in range(0, _total, batch_size):
-                if (time.monotonic() - _t0) > _full_embed_budget:
-                    import logging as _logging
-                    _logging.getLogger(__name__).error(
-                        "全量嵌入超出单轮预算 %ss（已处理 %d/%d），中止本轮并强制回滚",
-                        _full_embed_budget, i, _total,
-                    )
-                    self.embeddings = None
-                    self.faiss_index = None
-                    self.index_consistent = False
-                    self.consistency_reason = "full_embed_budget_exceeded"
-                    return
+            _since_ckpt = 0
+            for i in range(start, _total, batch_size):
                 batch = self.contents[i : i + batch_size]
-                embeds = embedding_api(batch, task="retrieval.passage")
-                all_embeds.append(embeds)
+                all_embeds.append(embedding_api(batch, task="retrieval.passage"))
                 _progress_advance(len(batch))
+                _since_ckpt += 1
+                # 预算判断放在「算完一批之后」：保证任何预算下每片都至少推进一批 ——
+                # 否则后台分片循环会在「片内一批都没算完」时反复空转（死循环）。
+                over = budget is not None and (time.monotonic() - _t0) > budget
+                if use_checkpoint and (_since_ckpt >= 10 or over):
+                    _since_ckpt = 0
+                    self._embed_ckpt_save(paths, np.vstack(all_embeds))
+                if over:
+                    log.info(
+                        "全量嵌入本轮推进到 %d/%d（预算 %.0fs 用尽），断点已存，稍后续跑",
+                        i + len(batch), _total, budget,
+                    )
+                    return False
             self.embeddings = np.vstack(all_embeds) if all_embeds else np.array([])
+            # 计算期间若 paths 变了（有人写入），本轮结果对不上最新状态：
+            # 存断点（下次按新 paths 复用前缀）后丢弃，不落盘。
+            if list(self.paths or []) != paths:
+                log.info("重建期间 paths 已变化（%d → %d 行），丢弃本轮结果并保留断点",
+                         len(paths), len(self.paths or []))
+                self._embed_ckpt_save(paths, self.embeddings)
+                return False
             # t6: 构建 FAISS 索引（IndexIDMap + 稳定 id）
             _ids = self._ensure_faiss_ids()
             self.faiss_index = self._build_faiss_index(self.embeddings, _ids)
@@ -1253,7 +1365,7 @@ class SearchIndex:
                     path=INDEX_MANIFEST_FILE,
                     extra={"consistent": False, "reason": self.consistency_reason},
                 )
-                return
+                return False
             _atomic_np_save(EMBEDDINGS_FILE, self.embeddings)
             if self.faiss_index is not None:
                 import os
@@ -1271,11 +1383,16 @@ class SearchIndex:
                 path=INDEX_MANIFEST_FILE,
                 extra={"consistent": True, "reason": "ok"},
             )
+            # 对齐落盘成功 → 断点使命完成
+            self._embed_ckpt_clear()
+            return True
         except Exception:
             log.warning("search.py 索引保存失败", exc_info=True)
+            return False
 
     def _build_embeddings_background(self):
-        threading.Thread(target=self.build_embeddings, daemon=True).start()
+        """后台补建向量：走统一的分片 + 断点路径（不再一次性跑全量）。"""
+        self._schedule_embed_rebuild()
 
     def start_rebuild_async(self):
         """启动后台全量重建（立即返回，不阻塞请求）。
@@ -1303,7 +1420,11 @@ class SearchIndex:
 
     def build_embeddings_incremental(self, changed_paths, changed_contents, removed, old_paths=None):
         if not self.contents or self.embeddings is None or self.embeddings.shape[0] == 0:
-            return self.build_embeddings()
+            # 向量面当前不可用（启动时被判不一致，或从没建过）：**不在写入路径里跑全量**
+            # —— 全量常态 20+ 分钟，会让这次写入一直挂着（2026-11-08 实测 7 分钟）。
+            # 改成标记 + 起后台分片重建，本次写入直接按 BM25 返回。
+            self._schedule_embed_rebuild()
+            return
         if not changed_paths and not removed:
             return
         try:
@@ -1320,10 +1441,11 @@ class SearchIndex:
             # 这里显式识别错位并降级，语义与「增量不可用」一致，不改变正确性。
             if int(self.embeddings.shape[0]) != len(ref_paths):
                 log.warning(
-                    "增量嵌入跳过：embeddings 行数(%d) 与 ref_paths(%d) 不一致，降级全量重建",
+                    "增量嵌入跳过：embeddings 行数(%d) 与 ref_paths(%d) 不一致，改走后台分片重建",
                     int(self.embeddings.shape[0]), len(ref_paths),
                 )
-                return self.build_embeddings()
+                self._schedule_embed_rebuild()
+                return
             keep_indices = list(range(len(ref_paths)))
             if removed:
                 keep_indices = [i for i in keep_indices if ref_paths[i] not in removed]
@@ -1346,9 +1468,10 @@ class SearchIndex:
             if n_emb != n_paths:
                 import logging
                 logging.getLogger(__name__).warning(
-                    f"incremental embeddings 与 paths 不对齐: paths={n_paths} emb={n_emb}，降级全量"
+                    f"incremental embeddings 与 paths 不对齐: paths={n_paths} emb={n_emb}，改走后台分片重建"
                 )
-                return self.build_embeddings()
+                self._schedule_embed_rebuild()
+                return
             # t6: 真增量——只增删变化向量，不再整表重建
             if not self._faiss_apply_incremental(changed_paths, removed):
                 # 任何不确定情形一律退回全量重建（安全兜底，等价改动前行为）
@@ -1358,9 +1481,9 @@ class SearchIndex:
             self._prune_faiss_ids()
             self._persist_incremental_index(n_paths, n_emb)
         except Exception:
-            # 增量嵌入失败，降级到全量构建
+            # 增量嵌入失败：同样不在写入路径里跑全量，改走后台分片重建
             log.warning("search.py 索引保存失败", exc_info=True)
-            self.build_embeddings()
+            self._schedule_embed_rebuild()
 
     @staticmethod
     def _classify_incremental_changes(ref_paths, keep_indices, removed,
