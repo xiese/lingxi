@@ -1,14 +1,20 @@
-"""设置页分组重做的回归测试（2026-10-18 第 1 项）。
+"""设置页 schema 与键集合的回归测试。
 
-锁死三件事，防止「前端加出来了但后端静默丢弃」这类假绿：
-    ① 后端写入白名单必须放行 DEFAULT_SETTINGS 里的全部键（含 rerank_enabled/rerank_model）
+1.0.20 起设置页结构由后端 `GET /api/settings/schema` 下发（单一真相源 =
+`config.SETTINGS_SCHEMA`），前端不再硬编码 `_SET_GROUPS`。本文件相应改成
+「比对 config.py 里那两张表」，并加一条反向守卫：前端不许再把设置项定义搬回去。
+
+锁死四件事：
+    ① 写入白名单必须放行 DEFAULT_SETTINGS 里的全部键（含 rerank_enabled/rerank_model）
     ② bool_keys 必须包含 rerank_enabled（否则字符串 "false" 会被当成真值）
-    ③ 前端 _SET_GROUPS 的键集合必须与 DEFAULT_SETTINGS 完全一致（双向无差集）
+    ③ SETTINGS_SCHEMA 的键集合与 DEFAULT_SETTINGS 完全一致（双向无差集）
+    ④ 前端设置段里不许再有硬编码设置项
 
 只读源码做静态校验，不启服务。
 """
 
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,12 +22,32 @@ CONFIG = ROOT / "scripts" / "kb_lib" / "config.py"
 ADMIN = ROOT / "scripts" / "kb_lib" / "routes" / "routes_admin.py"
 APPJS = ROOT / "scripts" / "web" / "app.js"
 
+# schema 里的控件类型白名单：前端 _setField / _setDetail 只认这几种。
+VALID_TYPES = {"text", "password", "number", "select", "checks", "textarea", "devices"}
+
+
+def _config_src():
+    return CONFIG.read_text(encoding="utf-8")
+
+
+def _schema_seg():
+    """截出 SETTINGS_SCHEMA 定义段（[ ... ] 之间）。"""
+    src = _config_src()
+    i = src.index("SETTINGS_SCHEMA = [")
+    j = src.index("\n]\n", i)
+    return src[i:j]
+
 
 def _default_setting_keys():
-    src = CONFIG.read_text(encoding="utf-8")
-    i = src.index("DEFAULT_SETTINGS")
-    seg = src[i:i + 4000]
-    return re.findall(r'^\s{4}"([a-z_]+)":', seg, re.M)
+    src = _config_src()
+    i = src.index("DEFAULT_SETTINGS = {")
+    j = src.index("\n}\n", i)
+    return re.findall(r'^\s{4}"([a-z_]+)":', src[i:j], re.M)
+
+
+def _schema_keys():
+    """schema 里的全部 k，含本地伪键 `_devices`（它不对应后端配置项）。"""
+    return re.findall(r'"k": "([a-z0-9_]+)"', _schema_seg())
 
 
 def _whitelist_keys():
@@ -31,22 +57,11 @@ def _whitelist_keys():
     return re.findall(r'"([a-z_]+)"', src[i:j])
 
 
-def _frontend_keys():
-    src = APPJS.read_text(encoding="utf-8")
-    i = src.index("var _SET_GROUPS")
-    j = src.index("function _setField", i)
-    return re.findall(r"\{k:'([a-z_]+)'", src[i:j])
-
-
-def test_后端默认设置项数与前端一致():
-    """项数不写死具体数字 —— 每加一个设置项都要改测试，是测试在管实现，不是反过来。
-
-    真正要守的是「后端定义了、前端必须渲染」和「白名单必须放行」，
-    那两条分别由 test_前端分组键与后端默认键完全一致 / test_写入白名单放行全部默认键 把关。
-    """
+def test_后端默认设置项数不低于基线():
+    """项数不写死具体数字 —— 每加一个设置项都要改测试，是测试在管实现，不是反过来。"""
     keys = _default_setting_keys()
     assert len(keys) >= 22, f"默认设置项数比基线少，实际 {len(keys)}：{keys}"
-    assert "other_server_prefixes" in keys, "第 5 项的其他服务器前缀设置没进默认值"
+    assert "other_server_prefixes" in keys, "其他服务器前缀设置没进默认值"
     assert "rerank_enabled" in keys and "rerank_model" in keys
 
 
@@ -64,43 +79,51 @@ def test_布尔键包含rerank_enabled():
     assert "qq_push_enabled" in names and "index_auto_rebuild" in names
 
 
-def test_前端分组键与后端默认键完全一致():
+def test_schema键集合与默认设置完全一致():
     be = set(_default_setting_keys())
-    fe = _frontend_keys()
-    assert len(fe) == len(set(fe)), f"前端有重复键：{fe}"
-    assert not (be - set(fe)), f"后端有、前端没渲染：{sorted(be - set(fe))}"
-    # 以 _ 开头的键是前端本地项（如 _devices 登录设备，数据来自 /auth/devices），
+    sk = _schema_keys()
+    assert len(sk) == len(set(sk)), f"schema 里有重复键：{sk}"
+    assert not (be - set(sk)), f"后端有、设置页 schema 没渲染：{sorted(be - set(sk))}"
+    # 以 _ 开头的键是页面本地项（如 _devices 登录设备，数据来自 /auth/devices），
     # 不对应任何后端配置项，不参与一致性比对。
-    local_only = {k for k in fe if k.startswith("_")}
-    assert not (set(fe) - be - local_only), f"前端有、后端没定义：{sorted(set(fe) - be - local_only)}"
+    local_only = {k for k in sk if k.startswith("_")}
+    assert not (set(sk) - be - local_only), f"schema 有、后端没定义：{sorted(set(sk) - be - local_only)}"
 
 
-def test_前端分组为三个卡片():
-    src = APPJS.read_text(encoding="utf-8")
-    i = src.index("var _SET_GROUPS")
-    j = src.index("function _setField", i)
-    seg = src[i:j]
-    groups = re.findall(r"\{t:'([^']+)'", seg)
-    assert groups == ["大模型", "检索", "系统"], f"分组应为三张卡，实际：{groups}"
+def test_schema每项字段合法():
+    """每项必须有 k/l/t，控件类型在白名单内，select/checks 必须带 opts。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import kb_lib.config as kbconfig
+
+    seen = set()
+    for g in kbconfig.SETTINGS_SCHEMA:
+        assert g.get("group"), f"分组缺 group：{g}"
+        items = g.get("items")
+        assert isinstance(items, list) and items, f"分组 {g.get('group')} 没有 items"
+        for it in items:
+            for f in ("k", "l", "t"):
+                assert it.get(f), f"设置项缺字段 {f}：{it}"
+            assert it["t"] in VALID_TYPES, f"未知控件类型 {it['t']}（{it['k']}）"
+            if it["t"] in ("select", "checks"):
+                assert it.get("opts"), f"{it['k']} 是 {it['t']} 但没有 opts"
+            assert it["k"] not in seen, f"设置键重复出现：{it['k']}"
+            seen.add(it["k"])
 
 
-def test_标签全部改中文人话且无emoji():
-    """第 1 项第 5 条：标签去 emoji / 去英文缩写。
+def test_schema分组为三个卡片():
+    assert re.findall(r'"group": "([^"]+)"', _schema_seg()) == ["大模型", "检索", "系统"]
 
-    扫描范围必须覆盖 `_SET_GROUPS`（所有标签都在这里）到 `ls()` 整段。
-    上一版只扫 `_setField` 到 `ls()` 之间的通用渲染函数体——那段一个标签都没有，
-    断言恒真，等于没测（glm 审查点出的假绿）。
-    英文缩写断言只扫 `l:'…'` 标签本体，不扫 hint 里的示例 URL。
+
+def test_schema标签全中文人话且无emoji():
+    """标签去 emoji / 去英文缩写（第 1 项第 5 条，随 schema 一起搬到后端）。
+
+    英文缩写断言只扫 `"l"` 标签本体，不扫 hint 里的示例 URL。
     """
-    src = APPJS.read_text(encoding="utf-8")
-    i = src.index("var _SET_GROUPS")
-    j = src.index("function ls()", i)
-    seg = src[i:j]
+    seg = _schema_seg()
     for emo in ("🤖", "🧬", "⏱", "🔍", "📋", "🎨", "⏳"):
         assert emo not in seg, f"标签区仍残留 emoji {emo}"
-    labels = re.findall(r"l:'([^']+)'", seg)
+    labels = re.findall(r'"l": "([^"]+)"', seg)
     assert len(labels) >= 22, f"扫到的标签比基线少，实际 {len(labels)}：{labels}"
-    # 展示用标签里不许出现英文品牌/缩写（glm 与 DS 都点过 QQ/OpenAI 残留在文案里）
     for bad in ("QQ", "OpenAI", "BM25", "Webhook", "Secret", "Payload", "Token", "API"):
         hit = [x for x in labels if bad in x]
         assert not hit, f"标签里仍有英文 {bad}：{hit}"
@@ -124,16 +147,9 @@ def test_密钥占位符不会被原样提交():
     assert "<REDACTED>" in seg, "sv() 没有跳过 <REDACTED> 占位符，保存会把真实密钥覆盖掉"
 
 
-def test_分组卡片在ls里真实渲染():
-    """三张分组卡 + 账号区必须真渲染出来，不是只定义在 _SET_GROUPS 里。
-
-    2026-10-18 第 13 项改成「一级列表 / 二级页」后，卡片渲染从 ls() 移到了 _setHome()，
-    断言跟着结构走；但要求「必须真渲染」这一点不能放松：
-    ls() 必须真的把 _SET_GROUPS 交给渲染函数，渲染函数里必须有卡片、账号区。
-    """
+def test_设置页渲染链路完整():
+    """三张分组卡 + 账号区必须真渲染，且一级页真的走了 schema 加载。"""
     src = APPJS.read_text(encoding="utf-8")
-    # 一级页由 _setHome() 拼搜索框 + _setList() 拼列表组成；
-    # 卡片和账号区在 _setList() 里（搜索时只换这一段，避免重建输入框）。
     i = src.index("function _setList")
     j = src.index("function _setHome", i)
     lst = src[i:j]
@@ -145,6 +161,8 @@ def test_分组卡片在ls里真实渲染():
     j = src.index("function _setDetail", i)
     home = src[i:j]
     assert "_setList()" in home, "_setHome() 没有调用 _setList()，一级列表等于没渲染"
+    assert "loadSettingsSchema" in home, \
+        "_setHome() 没有先确保 schema 已加载，一级页会渲染成空列表"
 
     # ls() 必须把数据真正交给渲染（一级页走 _setHome，二级页走 _setDetail）
     i = src.index("function ls()")
@@ -152,6 +170,20 @@ def test_分组卡片在ls里真实渲染():
     seg = src[i:j]
     assert "_SET_CACHE" in seg, "ls() 没有缓存后端返回值，二级页拿不到数据"
     assert "_setHome()" in seg and "_setDetail()" in seg, "ls() 没有真正调用渲染函数"
+
+
+def test_前端不再硬编码设置项():
+    """反向守卫：设置项定义只许留在后端 schema。
+
+    留着旧静态块的话，加一个设置项照样要改前端，schema 驱动等于白做。
+    """
+    src = APPJS.read_text(encoding="utf-8")
+    i = src.index("var _SET_GROUPS")
+    j = src.index("function _setField", i)
+    seg = src[i:j]
+    assert "var _SET_GROUPS = [];" in seg, "前端仍在本地硬编码 _SET_GROUPS"
+    assert "{k:'" not in seg, "前端设置段里仍有硬编码设置项定义"
+    assert "/api/settings/schema" in src, "前端没有去拉 /api/settings/schema"
 
 
 def test_输入框仍用s_前缀id以便保存逻辑复用():

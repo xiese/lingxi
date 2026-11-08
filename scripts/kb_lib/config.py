@@ -29,7 +29,7 @@ else:
 KB_ROOT = Path(os.environ.get("KB_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 _temp_file_lock = threading.Lock()
 NOTES_DIR = KB_ROOT / "笔记"
-VERSION = "1.0.19"
+VERSION = "1.0.20"
 # ── 环境变量新旧名兼容（2026-10-07 KB_HOST 拆名）──
 #
 # KB_HOST 历史上同名双义：本文件用它表示「监听绑定地址」，kb_mcp_server.py
@@ -271,6 +271,83 @@ DEFAULT_SETTINGS = {
     # 留空则统一显示「其他服务器」。
     "other_server_prefixes": "",
 }
+
+# ── 设置页 schema（设置页结构的单一真相源，1.0.20）──────────────────
+#
+# 背景：以前每加一个设置项要同时改三处 —— 这里、routes_admin 的写入白名单、
+# 前端 app.js 的 _SET_GROUPS；漏一处就是「后端有键、前端不渲染」或
+# 「前端渲染了、提交被静默丢弃」。现在前端只按 type 画控件，加项只改后端；
+# 键集合与 DEFAULT_SETTINGS 是否一致由 tests/test_settings_groups.py 把关。
+#
+# 每个 item 的字段：
+#   k       设置键。必须在 DEFAULT_SETTINGS 里；`devices` 是特殊控件（登录设备清单），不在其中。
+#   l       显示名
+#   t       控件类型：text / password / number / select / checks / textarea / devices
+#   g       组内小节名（同组内按 g 再分卡；不写则归到组名）
+#   i       图标名（前端 _SVG 的键）；c 图标色调 class。两者只影响外观。
+#   hint    说明文字（可选）
+#   opts    select / checks 的选项 {值: 显示名}（可选）
+#   secret  敏感项：回显只给占位，不下发明文（可选）
+#   restart 改后需重启服务才生效（可选）
+SECRET_SETTING_KEYS = {"llm_key", "embedding_key", "qq_push_webhook_secret"}
+
+SETTINGS_SCHEMA = [
+    {"group": "大模型", "desc": "对话与向量检索使用的外部服务", "items": [
+        {"k": "llm_base", "l": "对话服务地址", "t": "text", "g": "对话服务", "i": "link", "c": "i-blue",
+         "hint": "兼容主流大模型接口，例如 https://api.example.com/v1"},
+        {"k": "llm_key", "l": "对话服务密钥", "t": "password", "g": "对话服务", "i": "key", "c": "i-orange",
+         "secret": True},
+        {"k": "llm_model", "l": "对话模型名", "t": "text", "g": "对话服务", "i": "chip", "c": "i-purple"},
+        {"k": "embedding_base", "l": "向量服务地址", "t": "text", "g": "向量服务", "i": "db", "c": "i-teal",
+         "hint": "本地或远程的向量服务地址"},
+        {"k": "embedding_key", "l": "向量服务密钥", "t": "password", "g": "向量服务", "i": "key",
+         "c": "i-orange", "secret": True},
+        {"k": "embedding_model", "l": "向量模型名", "t": "text", "g": "向量服务", "i": "chip", "c": "i-purple"},
+        {"k": "embedding_type", "l": "检索模式", "t": "select", "g": "向量服务", "i": "search", "c": "i-blue",
+         "opts": {"bm25": "仅关键词检索（不需外部服务）", "llm": "关键词 + 向量混合检索"}},
+        {"k": "rerank_enabled", "l": "启用精排", "t": "select", "g": "精排", "i": "rerank", "c": "i-pink",
+         "opts": {"true": "启用", "false": "关闭"}, "hint": "精排需要外部服务，未配置时请保持关闭"},
+        {"k": "rerank_model", "l": "精排模型名", "t": "text", "g": "精排", "i": "chip", "c": "i-purple"},
+    ]},
+    {"group": "检索", "desc": "搜索结果的排序与去重", "items": [
+        {"k": "hybrid_alpha", "l": "关键词与向量权重", "t": "text", "g": "排序与去重", "i": "slider",
+         "c": "i-blue", "hint": "0 到 1，越大越偏关键词"},
+        {"k": "dedup_threshold", "l": "去重阈值", "t": "text", "g": "排序与去重", "i": "copy", "c": "i-gray",
+         "hint": "0 到 1，越大越不容易判为重复"},
+        {"k": "decay_tau_days", "l": "时间衰减（天）", "t": "number", "g": "排序与去重", "i": "clock",
+         "c": "i-teal", "hint": "0 表示关闭；数值越小，新笔记越靠前，建议 30 到 365"},
+        {"k": "index_auto_rebuild", "l": "自动重建索引", "t": "select", "g": "索引", "i": "refresh",
+         "c": "i-green", "opts": {"true": "开启", "false": "关闭"}},
+    ]},
+    {"group": "系统", "desc": "登录有效期、日志与消息推送", "items": [
+        {"k": "max_log_days", "l": "日志保留天数", "t": "number", "g": "存储与清理", "i": "doc", "c": "i-gray"},
+        {"k": "token_ttl", "l": "设备登录有效期（分钟）", "t": "number", "g": "登录与设备", "i": "timer",
+         "c": "i-blue", "hint": "90 天填 129600，1 年填 525600"},
+        {"k": "auth_watch_interval_seconds", "l": "新申请检测间隔（秒）", "t": "number", "g": "登录与设备",
+         "i": "radar", "c": "i-teal"},
+        {"k": "_devices", "l": "登录设备", "t": "devices", "g": "登录与设备", "i": "phone", "c": "i-green",
+         "hint": "每台设备首次/最近使用时间、次数；点「吊销」该设备的令牌立即失效"},
+        {"k": "theme", "l": "界面主题", "t": "select", "g": "登录与设备", "i": "moon", "c": "i-indigo",
+         "opts": {"dark": "深色", "light": "浅色"}},
+        {"k": "qq_push_enabled", "l": "消息推送", "t": "select", "g": "消息推送", "i": "bell", "c": "i-red",
+         "opts": {"true": "开启", "false": "关闭"}},
+        {"k": "qq_push_webhook_url", "l": "推送地址", "t": "text", "g": "消息推送", "i": "hook", "c": "i-blue"},
+        {"k": "qq_push_webhook_secret", "l": "推送密钥", "t": "password", "g": "消息推送", "i": "lock",
+         "c": "i-orange", "secret": True},
+        {"k": "qq_push_target", "l": "推送目标", "t": "text", "g": "消息推送", "i": "target", "c": "i-pink"},
+        {"k": "qq_push_payload_mode", "l": "推送消息格式", "t": "select", "g": "消息推送", "i": "tag",
+         "c": "i-gray", "opts": {"generic": "通用"}},
+        {"k": "qq_push_events", "l": "推哪些情况", "t": "checks", "g": "消息推送", "i": "check", "c": "i-green",
+         "hint": "打勾的事件才推；未接线的会标「待接入」",
+         "opts": {"auth_request": "有人申请授权", "new_device": "新设备登录",
+                  "login_failed": "连续登录失败（待接入）", "token_created": "令牌新建（待接入）",
+                  "token_revoked": "令牌吊销（待接入）", "release_deployed": "发版与部署结果（待接入）",
+                  "job_failed": "索引或任务失败（待接入）", "todo_due": "待办到期（待接入）"}},
+        {"k": "other_server_prefixes", "l": "其他服务器路径前缀", "t": "textarea", "g": "其他", "i": "server",
+         "c": "i-gray",
+         "hint": "一行一个「前缀|服务器名」，例如 /srv/notes/示例/|远程服务器；只影响徽标文字，不影响能不能点"},
+    ]},
+]
 
 # 「文件级键」白名单：由代码直接读取、但**设计上不进设置页**的调优项。
 #

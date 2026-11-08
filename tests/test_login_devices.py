@@ -323,22 +323,23 @@ def test_最近IP按时间取而不是字典序(tmp_audit):
     assert rows[0]["last_ip"] == "127.0.0.1", f"last_ip 取成了 {rows[0]['last_ip']}，说明用的是 MAX(ip)"
 
 
-def test_前端事件清单与后端一致():
-    """前后端事件键必须一一对应，漏一个某项就永远勾不上。"""
+def test_事件清单与后端一致():
+    """前后端事件键必须一一对应，漏一个某项就永远勾不上。
+
+    1.0.20 起事件清单（设置页那组复选框）定义在后端 `config.SETTINGS_SCHEMA` 里，
+    由 /api/settings/schema 下发给前端，所以这里比对的是 schema 与 PUSH_EVENTS。
+    """
     import re
     from kb_lib.push_qq import PUSH_EVENTS
-    app = (ROOT / "scripts/web/app.js").read_text(encoding="utf-8")
-    i = app.index("{k:'qq_push_events'")
-    j = app.index("}}", i)
-    seg = app[i:j]
-    # 去掉字段自身的属性（hint 等），只看 opts 里的键
-    if "opts:{" in seg:
-        seg = seg[seg.index("opts:{") + 6:]
-    # 只认「键名 + 冒号 + 单引号」且键长 ≥ 4 的，避免把 esc(o)、t:"x" 这类算进来；
-    # 值里可能带「（待接入）」这类中文后缀，不影响键名提取。
-    ui = set(re.findall(r"\b([a-z][a-z_]{3,}):'", seg))
+    cfg = (ROOT / "scripts/kb_lib/config.py").read_text(encoding="utf-8")
+    i = cfg.index('"k": "qq_push_events"')
+    j = cfg.index("}}", i)
+    seg = cfg[i:j]
+    # 只取 opts 里的键（hint 等字段排在 opts 之前，切掉）
+    seg = seg[seg.index('"opts"'):]
+    ui = set(re.findall(r'"([a-z][a-z_]{3,})": "', seg))
     back = set(PUSH_EVENTS.keys())
-    assert ui == back, f"前端缺 {sorted(back - ui)}，后端缺 {sorted(ui - back)}"
+    assert ui == back, f"schema 缺 {sorted(back - ui)}，后端缺 {sorted(ui - back)}"
 
 def test_90天清理真的有调用点(tmp_audit):
     """第 15 项要求「日志默认保留 90 天」。

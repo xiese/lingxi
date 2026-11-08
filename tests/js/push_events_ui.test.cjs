@@ -24,6 +24,28 @@ function extract(startMark, endMark) {
 // 截出设置页相关函数（从 _SET_GROUPS 到 ls()）
 const block = extract("var _SET_GROUPS", "function ls(){");
 
+// 设置项定义在**后端**（1.0.20 起由 /api/settings/schema 下发）：从 config.py 解析出
+// schema 注入沙箱供渲染测试用。schema 字面量须保持 JSON 兼容（只用双引号、无 True/False）。
+const CFG_SRC = fs.readFileSync(path.join(ROOT, "scripts/kb_lib/config.py"), "utf8");
+function _schemaBounds() {
+  const i = CFG_SRC.indexOf("SETTINGS_SCHEMA = [");
+  const j = CFG_SRC.indexOf("\n]\n", i);
+  return [i, j];
+}
+function schemaSeg() {
+  const [i, j] = _schemaBounds();
+  return CFG_SRC.slice(i, j);
+}
+// config.py 里是 Python 字面量：转成 JSON 再解析（True/False/None + 尾随逗号）。
+function pyToJson(t) {
+  return t.replace(/\bTrue\b/g, "true").replace(/\bFalse\b/g, "false").replace(/\bNone\b/g, "null")
+    .replace(/,\s*\]/g, "]");
+}
+const SCHEMA = (() => {
+  const [i, j] = _schemaBounds();
+  return JSON.parse(pyToJson(CFG_SRC.slice(i + "SETTINGS_SCHEMA = ".length, j + 2)));
+})();
+
 function makeSandbox(fetched) {
   const els = {};
   const sandbox = {
@@ -53,17 +75,19 @@ function makeSandbox(fetched) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(block, sandbox, { filename: "app.js#settings" });
-  // block 里含 `var _SET_CACHE = null;`，会覆盖预设值，这里再塞一次
+  // block 里含 `var _SET_CACHE = null;` / `var _SET_GROUPS = [];`，会覆盖预设值，这里再塞一次
   sandbox._SET_CACHE = { qq_push_events: "new_device,token_revoked" };
+  sandbox._SET_GROUPS = SCHEMA;
   return { sandbox, els };
 }
 
-// ── ① 设置项里真的有「推哪些情况」，且是多选 ──
-ok(/k:'qq_push_events'/.test(block), "设置项里没有 qq_push_events");
-ok(/t:'checks'/.test(block), "qq_push_events 不是多选类型");
-ok(/new_device:'新设备登录'/.test(block), "缺「新设备登录」事件");
-ok(/login_failed:'连续登录失败[^']*'/.test(block), "缺「连续登录失败」事件");
-ok(/token_revoked:'令牌吊销[^']*'/.test(block), "缺「令牌吊销」事件");
+// ── ① 设置项里真的有「推哪些情况」，且是多选（定义在后端 schema 里） ──
+const SEG = schemaSeg();
+ok(/"k": "qq_push_events"/.test(SEG), "设置项里没有 qq_push_events");
+ok(/"k": "qq_push_events"[\s\S]{0,200}"t": "checks"/.test(SEG), "qq_push_events 不是多选类型");
+ok(/new_device": "新设备登录"/.test(SEG), "缺「新设备登录」事件");
+ok(/login_failed": "连续登录失败[^"]*"/.test(SEG), "缺「连续登录失败」事件");
+ok(/token_revoked": "令牌吊销[^"]*"/.test(SEG), "缺「令牌吊销」事件");
 
 // ── ② 渲染：勾选状态来自已保存的值 ──
 {

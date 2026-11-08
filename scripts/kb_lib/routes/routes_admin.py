@@ -13,7 +13,7 @@ from ..routes.routes_search import _int_arg
 from ..config import (
     NOTES_DIR, HAS_JIEBA, SCAN_DIRS, PROTECTED, is_excluded_path,
     DEFAULT_SETTINGS, load_settings, save_settings, get_setting, TYPE_PREFIX,
-    TYPE_MAP, DIR_TO_TYPE, KB_ROOT,
+    TYPE_MAP, DIR_TO_TYPE, KB_ROOT, SETTINGS_SCHEMA, SECRET_SETTING_KEYS,
 )
 from ..store import is_master
 from ..audit import (
@@ -44,6 +44,23 @@ def get_settings_route():
         else:
             safe[k] = v
     return jsonify(safe)
+
+
+@bp.route("/api/settings/schema")
+@require_master
+def get_settings_schema_route():
+    """设置页结构：分组 / 控件类型 / 选项 / 说明 / 默认值。
+
+    前端据此渲染设置页 —— 加设置项只改后端 `config.SETTINGS_SCHEMA`，不必动前端。
+    只回结构，不回任何**当前值**（当前值走 /admin/settings，密钥在那里已做占位）；
+    默认值里剔除敏感项，避免把「密钥默认值」这种东西塞进前端。
+    """
+    defaults = {k: v for k, v in DEFAULT_SETTINGS.items() if k not in SECRET_SETTING_KEYS}
+    return jsonify({
+        "schema_version": 1,
+        "groups": SETTINGS_SCHEMA,
+        "defaults": defaults,
+    })
 
 
 @bp.route("/admin/settings", methods=["POST"])

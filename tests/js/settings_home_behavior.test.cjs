@@ -24,7 +24,21 @@ function extract(startMarker, endMarker) {
   return src.slice(i, j);
 }
 
-const groups = extract("var _SET_GROUPS", "function _setField");
+// 设置项定义在**后端**（1.0.20 起由 /api/settings/schema 下发）。直接从 config.py 解析
+// SETTINGS_SCHEMA 当数据源；它是 Python 字面量，要先把 Python 特有的写法转成 JSON：
+// True/False/None 三个字面量，以及 Python 允许、JSON 不允许的尾随逗号。
+const CONFIG = path.join(__dirname, "..", "..", "scripts", "kb_lib", "config.py");
+const SCHEMA = (function () {
+  const py = fs.readFileSync(CONFIG, "utf8");
+  const i = py.indexOf("SETTINGS_SCHEMA = [");
+  assert.ok(i > 0, "找不到 SETTINGS_SCHEMA");
+  const j = py.indexOf("\n]\n", i);
+  const text = py.slice(i + "SETTINGS_SCHEMA = ".length, j + 2)
+    .replace(/\bTrue\b/g, "true").replace(/\bFalse\b/g, "false").replace(/\bNone\b/g, "null")
+    .replace(/,\s*\]/g, "]");
+  return JSON.parse(text);
+})();
+
 const rowFn = extract("function _setField", "function _setSummary");
 const summaryFn = extract("function _setSummary", "// 一级页：分组圆角列表");
 const homeBlock = extract("// 一级页：分组圆角列表", "function ls(){");
@@ -60,7 +74,7 @@ function makeSandbox() {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(
-    groups + "\n" + rowFn + "\n" + summaryFn + "\n" + homeBlock +
+    "var _SET_GROUPS=" + JSON.stringify(SCHEMA) + ";\n" + rowFn + "\n" + summaryFn + "\n" + homeBlock +
     "\nthis._setHome=_setHome;this._setDetail=_setDetail;this._setOpen=_setOpen;" +
     "this._setSummary=_setSummary;this._SET=function(d){_SET_CACHE=d};" +
     "this._setQ=function(q){_SET_Q=q};",

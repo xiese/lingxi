@@ -1,3 +1,44 @@
+## 1.0.20
+
+2026-11-08 发布。**设置页改为后端 schema 驱动**：设置项的分组、顺序、控件类型、选项、
+说明全部由 `config.SETTINGS_SCHEMA` 定义，前端按 `t` 画控件。以前加一个设置项要同时改
+后端默认值表、写入白名单、前端 `_SET_GROUPS` 三处，漏一处就是「后端有键、前端不渲染」
+或「前端渲染了、提交被静默丢弃」；现在只改后端一处。
+
+### 背景
+
+阶段三「设置补全（schema 驱动）」的遗留项：`GET /api/settings/schema` 一直没做，
+前端 `app.js` 那份 `_SET_GROUPS` 是第二真相源，只能靠一条测试（前后端键集合一致）人工维持同步。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/kb_lib/config.py` | 新增 `SETTINGS_SCHEMA`（3 组 25 项，含 `_devices` 特殊控件）与 `SECRET_SETTING_KEYS`；VERSION 1.0.19 → 1.0.20 |
+| `scripts/kb_lib/routes/routes_admin.py` | 新增 `GET /api/settings/schema`：只回结构与默认值，敏感键的默认值不下发 |
+| `scripts/web/app.js` | `_SET_GROUPS` 改为 `[]` + `loadSettingsSchema()` 运行时拉取；`_setHome()` 增加「加载中 / 加载失败」两个状态；组名统一读 `g.group`（兼容梦境组旧字段 `g.t`） |
+| `tests/test_settings_groups.py` | 改为比对 `SETTINGS_SCHEMA` 与 `DEFAULT_SETTINGS`；新增「schema 每项字段合法」「前端不再硬编码设置项」两条守卫 |
+| `tests/test_login_devices.py` | 事件清单的比对来源从 app.js 改为 config.py |
+| `tests/js/settings_ios`、`settings_home_behavior`、`push_events_ui`、`login_devices_ui` | 四个前端测试的设置项数据源改为「从 config.py 解析 SETTINGS_SCHEMA」（Python 字面量 → JSON：转 True/False/None + 去尾随逗号） |
+
+### 口径
+
+- **schema 是唯一真相源**：每项的 `k` 必须在 `DEFAULT_SETTINGS` 里（唯一例外 `_devices`，
+  它是页面本地控件），键集合一致性由 `tests/test_settings_groups.py` 双向把关。
+- **敏感键的默认值不下发**：`llm_key` / `embedding_key` / `qq_push_webhook_secret` 不进 `defaults`。
+- **不做视觉改动**：图标名 `i` 与色调 `c` 一并放进 schema，前端仍按原样渲染，设置页外观与 1.0.19 一致。
+- 梦境设置（19 键，走独立接口 `/admin/dream/settings`）本次**未纳入** schema，仍是前端 `_DREAM_GROUPS`。
+
+### 验证
+
+- `python3 -m pytest tests/ -q --ignore=tests/js` → **733 passed / 13 failed / 2 skipped**；
+  13 个失败全部是既有的 `test_path_probe.py`（环境缺 sklearn），与基线逐条一致。
+- 前端：`node --test tests/js/*.test.cjs` → 65 passed；逐个脚本式测试全绿（含改过的 4 个）。
+- `scripts/ci/guard.py all` 通过。
+- 端到端（临时实例）：`GET /api/settings/schema` 返回 3 组 25 项、`defaults` 21 键、`llm_key` 不在其中。
+- 反向注入：把 `_SET_GROUPS` 改回非空（模拟「前端又自己存了一份」）→
+  `test_前端不再硬编码设置项` 立刻红；还原后绿。
+
 ## 1.0.19
 
 2026-11-08 发布。**双链用起来顺手**：编辑时输入 `[[` 弹候选、断链点击即新建、

@@ -35,9 +35,13 @@ function extract(name) {
 }
 
 // ── ① 设置项里真的有「登录设备」入口，且是 devices 类型 ──
+// 1.0.20 起设置项定义在后端 schema（由 /api/settings/schema 下发），从 config.py 取。
 {
-  ok(/k:'_devices'/.test(src), "设置项里没有 _devices 入口");
-  ok(/k:'_devices'[^}]*t:'devices'/.test(src), "_devices 不是 devices 类型");
+  const cfg = fs.readFileSync(path.join(ROOT, "scripts/kb_lib/config.py"), "utf8");
+  const i = cfg.indexOf("SETTINGS_SCHEMA = [");
+  const seg = cfg.slice(i, cfg.indexOf("\n]\n", i));
+  ok(/"k": "_devices"/.test(seg), "设置项里没有 _devices 入口");
+  ok(/"k": "_devices"[\s\S]{0,200}"t": "devices"/.test(seg), "_devices 不是 devices 类型");
 }
 
 // ── ② 一级页摘要显示「查看」，不是空白 ──

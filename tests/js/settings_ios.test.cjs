@@ -23,15 +23,17 @@ function ok(cond, msg) {
   assert.ok(cond, `断言 ${n} 失败：${msg}`);
 }
 
-// 取 _SET_GROUPS 定义块
+// 设置项定义在**后端**（1.0.20 起由 /api/settings/schema 下发），从 config.py 取。
+const CONFIG = path.join(ROOT, "scripts", "kb_lib", "config.py");
+const cfg = fs.readFileSync(CONFIG, "utf8");
 function groupsBlock() {
-  const i = src.indexOf("var _SET_GROUPS");
-  assert.ok(i > 0, "找不到 _SET_GROUPS");
-  const j = src.indexOf("];", i);
-  return src.slice(i, j);
+  const i = cfg.indexOf("SETTINGS_SCHEMA = [");
+  assert.ok(i > 0, "找不到 SETTINGS_SCHEMA");
+  const j = cfg.indexOf("\n]\n", i);
+  return cfg.slice(i, j);
 }
 const gb = groupsBlock();
-const keys = [...gb.matchAll(/\{k:'([a-z0-9_]+)'/g)].map((m) => m[1]);
+const keys = [...gb.matchAll(/"k": "([a-z0-9_]+)"/g)].map((m) => m[1]);
 
 // ① 原有设置项一个都不能少（23 项，与待办里「所有原有设置项都能在新分组里找到」对应）
 const REQUIRED = [

@@ -1662,46 +1662,21 @@ function logCleanRun(){
 // ─── 设置 ───
 // 2026-10-18 第 1 项：按设计稿分组重做。三组卡片 + 退出登录区，22 项全部可见可改。
 // 渲染约束：每项仍带 id="s_<键名>"，sv() 靠 #sf [id^="s_"] 收集，保存逻辑不动。
-var _SET_GROUPS = [
-  {t:'大模型', d:'对话与向量检索使用的外部服务', items:[
-    {k:'llm_base', l:'对话服务地址', t:'text', i:'link', c:'i-blue', g:'对话服务', hint:'兼容主流大模型接口，例如 https://api.example.com/v1'},
-    {k:'llm_key', l:'对话服务密钥', t:'password', i:'key', c:'i-orange', g:'对话服务'},
-    {k:'llm_model', l:'对话模型名', t:'text', i:'chip', c:'i-purple', g:'对话服务'},
-    {k:'embedding_base', l:'向量服务地址', t:'text', i:'db', c:'i-teal', g:'向量服务', hint:'本地或远程的向量服务地址'},
-    {k:'embedding_key', l:'向量服务密钥', t:'password', i:'key', c:'i-orange', g:'向量服务'},
-    {k:'embedding_model', l:'向量模型名', t:'text', i:'chip', c:'i-purple', g:'向量服务'},
-    {k:'embedding_type', l:'检索模式', t:'select', i:'search', c:'i-blue', g:'向量服务', opts:{'bm25':'仅关键词检索（不需外部服务）','llm':'关键词 + 向量混合检索'}},
-    {k:'rerank_enabled', l:'启用精排', t:'select', i:'rerank', c:'i-pink', g:'精排', opts:{'true':'启用','false':'关闭'}, hint:'精排需要外部服务，未配置时请保持关闭'},
-    {k:'rerank_model', l:'精排模型名', t:'text', i:'chip', c:'i-purple', g:'精排'}
-  ]},
-  {t:'检索', d:'搜索结果的排序与去重', items:[
-    {k:'hybrid_alpha', l:'关键词与向量权重', t:'text', i:'slider', c:'i-blue', g:'排序与去重', hint:'0 到 1，越大越偏关键词'},
-    {k:'dedup_threshold', l:'去重阈值', t:'text', i:'copy', c:'i-gray', g:'排序与去重', hint:'0 到 1，越大越不容易判为重复'},
-    {k:'decay_tau_days', l:'时间衰减（天）', t:'number', i:'clock', c:'i-teal', g:'排序与去重', hint:'0 表示关闭；数值越小，新笔记越靠前，建议 30 到 365'},
-    {k:'index_auto_rebuild', l:'自动重建索引', t:'select', i:'refresh', c:'i-green', g:'索引', opts:{'true':'开启','false':'关闭'}}
-  ]},
-  {t:'系统', d:'登录有效期、日志与消息推送', items:[
-    // 2026-10-19 遗留 #15：组内再按语义分卡（g 字段），组名与项 id 均未改。
-    {k:'max_log_days', l:'日志保留天数', t:'number', i:'doc', c:'i-gray', g:'存储与清理'},
-    {k:'token_ttl', l:'设备登录有效期（分钟）', t:'number', i:'timer', c:'i-blue', g:'登录与设备', hint:'90 天填 129600，1 年填 525600'},
-    {k:'auth_watch_interval_seconds', l:'新申请检测间隔（秒）', t:'number', i:'radar', c:'i-teal', g:'登录与设备'},
-    // 第 15 项：登录设备清单 + 一键吊销（数据来自 GET /auth/devices）
-    {k:'_devices', l:'登录设备', t:'devices', i:'phone', c:'i-green', g:'登录与设备', hint:'每台设备首次/最近使用时间、次数；点「吊销」该设备的令牌立即失效'},
-    {k:'theme', l:'界面主题', t:'select', i:'moon', c:'i-indigo', g:'登录与设备', opts:{'dark':'深色','light':'浅色'}},
-    {k:'qq_push_enabled', l:'消息推送', t:'select', i:'bell', c:'i-red', g:'消息推送', opts:{'true':'开启','false':'关闭'}},
-    {k:'qq_push_webhook_url', l:'推送地址', t:'text', i:'hook', c:'i-blue', g:'消息推送'},
-    {k:'qq_push_webhook_secret', l:'推送密钥', t:'password', i:'lock', c:'i-orange', g:'消息推送'},
-    {k:'qq_push_target', l:'推送目标', t:'text', i:'target', c:'i-pink', g:'消息推送'},
-    {k:'qq_push_payload_mode', l:'推送消息格式', t:'select', i:'tag', c:'i-gray', g:'消息推送', opts:{'generic':'通用'}},
-    // 第 16 项：按事件勾选推送（多选，存逗号分隔字符串）
-    {k:'qq_push_events', l:'推哪些情况', t:'checks', i:'check', c:'i-green', g:'消息推送', hint:'打勾的事件才推；未接线的会标「待接入」', opts:{
-      auth_request:'有人申请授权', new_device:'新设备登录',
-      login_failed:'连续登录失败（待接入）', token_created:'令牌新建（待接入）',
-      token_revoked:'令牌吊销（待接入）', release_deployed:'发版与部署结果（待接入）',
-      job_failed:'索引或任务失败（待接入）', todo_due:'待办到期（待接入）'}},
-    {k:'other_server_prefixes', l:'其他服务器路径前缀', t:'textarea', i:'server', c:'i-gray', g:'其他', hint:'一行一个「前缀|服务器名」，例如 /srv/notes/示例/|远程服务器；只影响徽标文字，不影响能不能点'}
-  ]}
-];
+// 设置页结构由后端 `/api/settings/schema` 提供（单一真相源 = config.SETTINGS_SCHEMA）：
+// 加设置项只改后端，前端按 t 画控件；首次打开设置页时异步拉取，拉到前显示「加载中」。
+var _SET_GROUPS = [];
+var _SET_SCHEMA_LOADED = false;
+var _SET_SCHEMA_TRIED = false;
+function loadSettingsSchema(){
+  if(_SET_SCHEMA_LOADED)return Promise.resolve(_SET_GROUPS);
+  if(typeof ap!=='function')return Promise.resolve(_SET_GROUPS);
+  _SET_SCHEMA_TRIED=true;
+  return ap('/api/settings/schema').then(function(d){
+    var gs=(d&&d.groups)||[];
+    if(gs.length){_SET_GROUPS=gs;_SET_SCHEMA_LOADED=true}
+    return _SET_GROUPS;
+  }).catch(function(){return _SET_GROUPS});
+}
 // 二级页专用：只渲染控件，不再重复输出标签和说明（标题已由 _setDetail 的大标题给出）
 function _setField(f,d){
   var curVal=d[f.k];
@@ -1904,7 +1879,7 @@ function _setList(){
       if(subIdx[name]===undefined){subIdx[name]=subs.length;subs.push({t:name,items:[]})}
       subs[subIdx[name]].items.push(f);
     });
-    h+='<div class="set-group"><div class="set-group-head">'+esc(g.t)+'</div>';
+    h+='<div class="set-group"><div class="set-group-head">'+esc(g.group||g.t)+'</div>';
     subs.forEach(function(sg){
       if(subs.length>1)h+='<div class="set-subhead">'+esc(sg.t)+'</div>';
       h+='<div class="set-card">';
@@ -1931,7 +1906,7 @@ function _setList(){
       if(subIdx[name]===undefined){subIdx[name]=subs.length;subs.push({t:name,items:[]})}
       subs[subIdx[name]].items.push(f);
     });
-    h+='<div class="set-group"><div class="set-group-head">'+esc(g.t)+'</div>';
+    h+='<div class="set-group"><div class="set-group-head">'+esc(g.group||g.t)+'</div>';
     subs.forEach(function(sg){
       if(subs.length>1)h+='<div class="set-subhead">'+esc(sg.t)+'</div>';
       h+='<div class="set-card">';
@@ -1957,11 +1932,23 @@ function _setList(){
 }
 
 function _setHome(){
+  // 设置页结构来自后端 schema：首次打开先拉一次，未拉到前不渲染空列表。
+  // 只试一次；失败给出明确提示，避免停在「永远加载中」的假状态。
+  var sf=document.getElementById('sf');
+  if(!_SET_GROUPS.length){
+    if(_SET_SCHEMA_TRIED && !_SET_SCHEMA_LOADED){
+      sf.innerHTML='<div class="set-title">设置</div><p class="set-empty">设置项加载失败，请刷新页面重试</p>';
+      return;
+    }
+    sf.innerHTML='<div class="set-title">设置</div><p class="set-empty">正在加载设置项…</p>';
+    loadSettingsSchema().then(function(){_setHome()});
+    return;
+  }
   var h='<div class="set-title">设置</div>'
     +'<div class="set-search"><input id="setSearch" type="search" placeholder="搜索设置项"'
     +' value="'+esc(_SET_Q)+'" oninput="_setSearch(this.value)"></div>'
     +'<div id="setList">'+_setList()+'</div>';
-  document.getElementById('sf').innerHTML=h;
+  sf.innerHTML=h;
 }
 
 // 二级页：单个设置项编辑
