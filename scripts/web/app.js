@@ -159,7 +159,7 @@ function lgEdgeCap(mobile){
 /**
  * 图谱标签文本（第 2 项改造，2026-10-18）。
  * 旧实现是 ctx.fillText(title.slice(0,8))——硬截前 8 字。
- * 库里 140 篇标题以「示例项目」开头、11 篇以「示例项目 组合」开头，
+ * 库里有一批同前缀标题（示例只列几条，不是全量清单），
  * 前 8 字完全相同，于是屏幕上出现一堆一模一样的「示例项目 组」。
  *
  * 现在：同前缀的一组节点，从**尾部**保留区分度最高的片段——
@@ -255,7 +255,7 @@ function labText(title, peers, dirHint){
  */
 function labPick(nodes, cap){
   // 只给「大节点」贴标签：按度数降序取前 cap 个，且必须有边。
-  // 不能用 degree>=3 这种硬阈值——实测全库 2015 节点里 1899 个是孤立点(degree=0)，
+  // 不能用 degree>=3 这种硬阈值——真实库里绝大多数节点是孤立点(degree=0)，
   // degree>=3 只有 19 个，屏幕上几乎不出现标签，等于把标签功能关掉。
   // 取「有边的节点按度数排序取前 N」，手机 30 / 桌面 40，小图也能看出主干。
   var arr=(nodes||[]).filter(function(n){return (n.degree||0)>=1});
@@ -332,11 +332,11 @@ function lgPrune(gd, cap, showAll){
   var nodes=(gd&&gd.nodes)||[], links=(gd&&gd.links)||[];
   var total=nodes.length;
   if(showAll||cap>=total) return {nodes:nodes, links:links, total:total, capped:false};
-  // 裁剪优先保留有边的节点：实测 2015 节点里 1899 个孤立点(degree=0)，
+  // 裁剪优先保留有边的节点：真实库里绝大多数节点是孤立点(degree=0)，
   // 纯按 degree 排序取前 150 会混进 34 个没连线的散点，画出来是一屏漂浮的点。
-  // 先取有边的（degree>=1，共 116 个），不够再拿孤立点补足 cap。
+  // 先取有边的（degree>=1），不够再拿孤立点补足 cap。
   //
-  // 遗留 #16 修正：光按 degree 排序还不够。实测生产图 116 个带 wiki 边的节点
+  // 遗留 #16 修正：光按 degree 排序还不够。带 wiki 边的节点
   // （= 有 [](./xx.md) 人工双链的笔记）在 degree 序里只挤进 1 个——人工双链被
   // 自动相似度产生的散点全挤掉了，图上看不出「哪几篇是我手动串起来的」。
   // 所以第一优先级改成「带 wiki 边的节点」，其次才按 degree。
@@ -367,7 +367,7 @@ function lgPrune(gd, cap, showAll){
 /**
  * 遗留 #16「去蜘蛛网」：边上限裁剪。抽成独立函数才能被测试直接验证真实行为。
  *
- * 问题实测：生产 2028 节点 / 4617 条边里 4518 条是语义边（98%）。只裁节点没用——
+ * 问题实测：真实图里绝大多数边是语义边（约 98%）。只裁节点没用——
  * 150 个节点之间的语义边仍能把每个点连到十几个邻居，视觉上还是一张网。
  * 规则：按「优先级 + 权重」排序后，每个节点最多保留 perNode 条已接收的边，
  * 超出直接丢弃。wiki 边（人工双链）永远优先于语义边，不让自动相似度淹没人工结构。
@@ -731,7 +731,7 @@ function lgRefresh(){
 
 // 目录过滤输入框的防抖：原 oninput 每敲一个字符就打一次 /notes?limit=200
 var _ltT=null;function ltD(){clearTimeout(_ltT);_ltT=setTimeout(ltFilter,200)}
-// 全量树内存缓存：过滤是纯前端筛选，不再每敲一个字重拉一次全量响应（实测该响应 835KB）
+// 全量树内存缓存：过滤是纯前端筛选，不再每敲一个字重拉一次全量响应（实测该响应数百 KB）
 // 注意语义边界：只有「过滤输入」这条路走缓存；切页签/点标签/批量操作后仍走 lt() 重新拉取。
 var _ntItems=null;
 // 写入笔记后失效缓存：下一次切页签/点标签时会重新拉取全量（与改动前行为一致——原实现保存后也不主动刷树）
@@ -1562,7 +1562,7 @@ function doUpload(){if(!uploadFileData)return;const btn=document.getElementById(
 function loadUploadHistory(){ap('/admin/audit?action=upload&limit=5').then(d=>{var h=document.getElementById('uploadResult');if(d.entries?.length&&!uploadFileData){h.classList.remove('hidden');h.innerHTML='<h4 class="text-sm font-semibold text-gray-500 mb-2">📋 最近上传</h4>'+d.entries.map(e=>`<div class="flex items-center gap-2 text-sm p-2 bg-gray-50 rounded-lg"><span class="text-xs text-gray-400">${(e.time||'').slice(5,16).replace('T',' ')}</span><span class="text-gray-600 truncate">${esc(e.path||'')}</span></div>`).join('')}}).catch(()=>{})}
 
 // ─── 审计日志 ───
-// 2026-10-18 第 4 项：原来 ll() 一次 100 条却把全部分页按钮铺出来（生产 3.9 万条 = 395 页）。
+// 2026-10-18 第 4 项：原来 ll() 一次 100 条却把全部分页按钮铺出来（生产数万条 = 数百页）。
 // 改成「首屏 50 条 + 加载更多，每次加 50」，彻底去掉分页按钮；同时加类别筛选与手动清理。
 var logPage=1, logCatSel='', logLoaded=0, logTotal=0;
 var LOG_PAGE_SIZE=50;

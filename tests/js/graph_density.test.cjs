@@ -36,7 +36,7 @@ for (const fn of ['lgPrune', 'lgStat', 'lgOpts', 'lgQuery', 'lgCap', 'lgEdgeCap'
   vm.runInContext(grab(fn), sandbox, {filename: fn + '.js'});
 }
 
-// 按生产形态造图：200 节点里 20 个有边、180 个孤立点；边 300 条（含大量语义边）
+// 按生产形态造图：200 节点里 20 个有边、180 个孤立点；边 179 条（语义 160 + wiki 19）
 function prodLikeGraph() {
   const nodes = [], links = [];
   const linked = 20, isolated = 180;

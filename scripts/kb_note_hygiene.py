@@ -400,7 +400,7 @@ def _check_nested_top_dirs(notes_dir: Path, issues: list[dict]) -> None:
 # 11 duplicate leading H1（2026-09-26 新增）
 # 背景：REST 写入时无条件在正文前插一行 `# {title}`（routes_notes.py），
 # 若客户端自己也写了标题，就会出现两个标题；反复保存会越堆越多。
-# 旧检测不看正文标题，全库曾累积到 531 篇双标题。
+# 旧检测不看正文标题，全库曾累积到数百篇双标题。
 def _check_duplicate_h1(files: list[dict], issues: list[dict]) -> None:
     for it in files:
         if it["in_archive"]:

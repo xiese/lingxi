@@ -38,7 +38,7 @@ for (const fn of ['lgPrune', 'lgStat', 'lgOpts', 'lgQuery']) {
   vm.runInContext(grab(fn), sandbox, {filename: fn + '.js'});
 }
 
-// 造一个与生产同形态的图：300 节点 / 120 边（wiki 99 + 语义 21）
+// 造一个与生产同形态的图：300 节点 / 120 边（wiki 21 + 语义 99）
 function makeGraph() {
   const nodes = [];
   for (let i = 0; i < 300; i++) nodes.push({id: 'n' + i, degree: i % 37});
@@ -47,7 +47,7 @@ function makeGraph() {
     links.push({
       source: 'n' + (i % 300),
       target: 'n' + ((i * 7 + 3) % 300),
-      type: i < 99 ? 'wiki' : 'semantic'
+      type: i < 21 ? 'wiki' : 'semantic'
     });
   }
   return {nodes, links, meta: {node_count: 300, link_count: 120}};

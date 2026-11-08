@@ -98,7 +98,7 @@ restart_services() {
 # 1.0.7 及更早：整包 pickle，只认 <KB_ROOT>/.search_index.pkl
 # 1.0.8 及更新：JSON + npz，认 <KB_ROOT>/.search_index.json（+ .arrays.npz）
 # 两个方向都不能只切软链：
-#   * 往旧版回滚：旧版看不到 .json，会当成索引缺失 → 全量重建（1823 篇实测约 40 秒，
+#   * 往旧版回滚：旧版看不到 .json，会当成索引缺失 → 全量重建（千级篇目实测约 40 秒，
 #     分词占 35 秒），期间检索不可用，而 /health 照样 200，看不出问题。
 #   * 回滚后再往新版升：新版看到残留的 .json 就直接用，读到的是回滚前的过期索引。
 # 处理办法：往旧版回滚时由 .pkl.legacy 复制出 .pkl（原件保留，可反复回滚），
@@ -133,7 +133,7 @@ prepare_index_for() {
         green "  索引适配：由 .pkl.legacy 复制出 .search_index.pkl（原件保留）"
       fi
     elif [ ! -f "$pkl" ] && [ ! -f "$legacy" ]; then
-      yellow "  索引适配：既无 .pkl 也无 .pkl.legacy，目标版会全量重建（1823 篇约 40 秒）"
+      yellow "  索引适配：既无 .pkl 也无 .pkl.legacy，目标版会全量重建（千级篇目约 40 秒）"
     fi
     # 旧版只认 .pkl；把新版 JSON 归档，避免再升级时读到过期索引
     if [ -f "$js" ]; then

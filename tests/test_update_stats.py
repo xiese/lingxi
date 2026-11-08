@@ -21,8 +21,8 @@ API_RESPONSES = {
     "/health": {"indexed": 113, "stale": 1, "version": "5.9.3", "jieba": True},
     "/api/index/status": {"indexed": 114},
     "/dashboard": {
-        "total": 280, "projects": 574, "knowledge": 797,
-        "writing": 0, "diaries": 0, "archived": 199,
+        "total": 280, "projects": 57, "knowledge": 79,
+        "writing": 0, "diaries": 0, "archived": 19,
     },
     "/api/tags": {"total": 332},
     "/notes?limit=1": {"total": 280},
@@ -86,8 +86,8 @@ def test_get_dashboard_stats_prefers_index_status(kb, monkeypatch):
     assert stats["indexed"] == 114           # 鉴权口径优先
     assert stats["total_md"] == 280          # dashboard.total
     assert stats["tags"] == 332
-    assert stats["projects"] == 574 and stats["knowledge"] == 797
-    assert stats["archived"] == 199 and stats["diaries"] == 0
+    assert stats["projects"] == 57 and stats["knowledge"] == 79
+    assert stats["archived"] == 19 and stats["diaries"] == 0
     assert stats["stale"] == 1 and stats["version"] == "5.9.3"
     assert stats["jieba"] is True
     assert stats["excluded"] == 0             # notes.total == dashboard.total

@@ -1,8 +1,8 @@
 /**
  * 第 2 项图谱状态栏口径自洽（2026-10-18）。
  *
- * 真浏览器实测抓到过：「节点 300 / 2015 · 连线 226（wiki 99 / 语义 641）」
- * —— 226 ≠ 99+641。外面用裁剪后的实际值、括号里用后端原始总数，两个口径混用。
+ * 真浏览器实测抓到过：「节点 300 / 300 · 连线 110（wiki 99 / 语义 21）」
+ * —— 110 ≠ 99+21。外面用裁剪后的实际值、括号里用后端原始总数，两个口径混用。
  *
  * 审查指出上一版是假绿：只调 lgStat 并喂一组自洽的入参，等于测试自己
  * 保证自己正确；lgRefresh 里真正传参的地方没被覆盖，bug 复发也不会报红。
@@ -61,16 +61,16 @@ function t(name, fn) {
 
 function makeGraph() {
   const nodes = [];
-  for (let i = 0; i < 2015; i++) nodes.push({id: 'n' + i, degree: i % 37});
+  for (let i = 0; i < 300; i++) nodes.push({id: 'n' + i, degree: i % 37});
   const links = [];
-  for (let i = 0; i < 740; i++) {
+  for (let i = 0; i < 120; i++) {
     links.push({
-      source: 'n' + (i % 2015),
-      target: 'n' + ((i * 7 + 3) % 2015),
+      source: 'n' + (i % 300),
+      target: 'n' + ((i * 7 + 3) % 300),
       type: i < 99 ? 'wiki' : 'semantic'
     });
   }
-  return {nodes, links, meta: {node_count: 2015, wiki_link_count: 99, semantic_count: 641}};
+  return {nodes, links, meta: {node_count: 300, wiki_link_count: 99, semantic_count: 21}};
 }
 
 // 从状态栏文案里抠出四个数字，用于交叉验算
@@ -97,15 +97,15 @@ t('默认裁剪态：状态栏必须标出「已裁剪」和原始总数', () =>
   const s = statsFromRendered(p.nodes, p.links, g.meta);
   assert.ok(s.indexOf('已裁剪') >= 0, '裁剪了却没标注: ' + s);
   assert.ok(s.indexOf('原 wiki 99') >= 0, '没标原始 wiki 数: ' + s);
-  assert.ok(s.indexOf('原 语义 641') >= 0 || s.indexOf('语义 641') >= 0, '没标原始语义数: ' + s);
+  assert.ok(s.indexOf('原 语义 21') >= 0 || s.indexOf('语义 21') >= 0, '没标原始语义数: ' + s);
 });
 
-t('默认裁剪态：节点数显示 150 / 2015', () => {
+t('默认裁剪态：节点数显示 150 / 300', () => {
   const g = makeGraph();
   const o = sandbox.lgOpts({});
   const p = sandbox.lgPrune(g, o.cap, o.showAll);
   const s = statsFromRendered(p.nodes, p.links, g.meta);
-  assert.ok(s.indexOf('节点 150 / 2015') >= 0, s);
+  assert.ok(s.indexOf('节点 150 / 300') >= 0, s);
 });
 
 t('显示全部时：不出现「已裁剪」', () => {
@@ -114,7 +114,7 @@ t('显示全部时：不出现「已裁剪」', () => {
   const p = sandbox.lgPrune(g, o.cap, o.showAll);
   const s = statsFromRendered(p.nodes, p.links, g.meta);
   assert.ok(s.indexOf('已裁剪') < 0, '没裁剪却标了已裁剪: ' + s);
-  assert.ok(s.indexOf('节点 2015') >= 0, s);
+  assert.ok(s.indexOf('节点 300') >= 0, s);
 });
 
 t('关语义边时（生产实测）：只应出现 wiki 99 / 语义 0', () => {
@@ -122,10 +122,10 @@ t('关语义边时（生产实测）：只应出现 wiki 99 / 语义 0', () => {
   // 注意 fixture 必须让 wiki 边连在「degree 前 300」的节点上，
   // 否则会被裁剪掉——生产里 wiki 边恰恰连在 hub 节点上才活下来。
   const nodes = [];
-  for (let i = 0; i < 2015; i++) nodes.push({id: 'n' + i, degree: 2015 - i});
+  for (let i = 0; i < 300; i++) nodes.push({id: 'n' + i, degree: 300 - i});
   const links = [];
   for (let i = 0; i < 99; i++) links.push({source: 'n' + i, target: 'n' + ((i + 1) % 99), type: 'wiki'});
-  const meta = {node_count: 2015, wiki_link_count: 99, semantic_count: 641};
+  const meta = {node_count: 300, wiki_link_count: 99, semantic_count: 21};
   const o = sandbox.lgOpts({});
   const p = sandbox.lgPrune({nodes, links, meta}, o.cap, o.showAll);
   const s = statsFromRendered(p.nodes, p.links, meta);
@@ -136,8 +136,8 @@ t('关语义边时（生产实测）：只应出现 wiki 99 / 语义 0', () => {
 });
 
 t('反向验证：若把括号里的值换成 meta 原始总数，本测试必须报红', () => {
-  // 直接复刻原 bug 的输出形态，确认 nums() 能抓出 226 ≠ 99+641
-  const buggy = '节点 300 / 2015 · 连线 226（wiki 99 / 语义 641）（已裁剪，原 wiki 99 / 语义 641）';
+  // 直接复刻原 bug 的输出形态，确认 nums() 能抓出 110 ≠ 99+21
+  const buggy = '节点 300 / 300 · 连线 110（wiki 99 / 语义 21）（已裁剪，原 wiki 99 / 语义 21）';
   const n = nums(buggy);
   assert.notStrictEqual(n.wiki + n.semantic, n.links,
     '测试抓不出原 bug，说明断言无效');

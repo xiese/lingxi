@@ -159,7 +159,7 @@ jobs:
         run: |
           set -e
           TAG="${{ steps.ver.outputs.tag }}"
-          git config user.name "lingxi-release-bot"
+          git config user.name "xiese & lingxi"
           git config user.email "lingxi@users.noreply.github.com"
           # tag 可能已存在（上次 tag 推成功但 Release 失败），此时只补 Release，不重复打 tag
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
