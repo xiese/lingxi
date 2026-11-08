@@ -145,3 +145,65 @@ def test_后台分片循环能推进到对齐(iso, monkeypatch):
     assert si.embeddings is not None and si.embeddings.shape[0] == 3
     assert iso["calls"]["texts"] == ["A", "B", "C"]
     assert not si._embed_ckpt_meta_path().exists()
+
+
+# ── 以下 5 条对应 2026-11-08 独立只读审查班指出的洞 ──
+
+def test_正文改过的那行必须重算不能复用旧向量(iso):
+    """断点复用键若只有路径，改正文后旧向量会被静默留下（改动在向量面永久丢失）。"""
+    si = _si(["a.md", "b.md"], ["甲", "乙"])
+    si._embed_ckpt_save(["a.md", "b.md"], np.ones((2, DIM), dtype=np.float32))
+    si.contents = ["甲", "乙改过"]        # 路径没变，只改了正文
+    iso["calls"]["texts"].clear()
+
+    assert si.build_embeddings() is True
+    assert iso["calls"]["texts"] == ["乙改过"], "正文变过的那行不能复用断点里的旧向量"
+
+
+def test_index_version_不符时断点整体作废(iso):
+    si = _si(["a.md", "b.md"], ["甲", "乙"])
+    si._embed_ckpt_save(["a.md", "b.md"], np.ones((2, DIM), dtype=np.float32))
+    si._index_version += 1               # 模拟换嵌入模型/重建后版本推进
+    iso["calls"]["texts"].clear()
+
+    assert si.build_embeddings() is True
+    assert iso["calls"]["texts"] == ["甲", "乙"], "版本不符时不该复用任何一行"
+
+
+def test_旧格式断点缺指纹时整体作废(iso):
+    si = _si(["a.md", "b.md"], ["甲", "乙"])
+    si._embed_ckpt_save(["a.md", "b.md"], np.ones((2, DIM), dtype=np.float32))
+    mp = si._embed_ckpt_meta_path()
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    m.pop("hashes", None)                # 造一个「只有 paths、没有指纹」的旧断点
+    mp.write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    iso["calls"]["texts"].clear()
+
+    assert si.build_embeddings() is True
+    assert iso["calls"]["texts"] == ["甲", "乙"], "缺指纹的旧断点应当整体作废（宁可重算）"
+
+
+def test_paths变了不把错位向量留在内存(iso, monkeypatch):
+    """校验没过就不能动 self.embeddings —— 否则行数恰好对上时会静默对外服务错位向量。"""
+    si = _si(["a.md", "b.md"], ["甲", "乙"])
+    old = np.full((2, DIM), 9.0, dtype=np.float32)
+    si.embeddings = old
+    real = search_mod.embedding_api
+
+    def tamper(texts, task=None):
+        si.paths = ["a.md", "b.md", "new.md"]   # 模拟算到一半有人写入
+        return real(texts, task)
+
+    monkeypatch.setattr(search_mod, "embedding_api", tamper, raising=False)
+    assert si.build_embeddings() is False
+    assert si.embeddings is old, "校验没过就不该改 self.embeddings"
+
+
+def test_分片循环连续不推进会自己退出(iso, monkeypatch):
+    """否则嵌入服务/断点写盘持续失败时会无限重试，每片白烧一整片时间。"""
+    import time as _t
+    si = _si(["a.md", "b.md"], ["甲", "乙"])
+    monkeypatch.setattr(si, "build_embeddings", lambda *a, **k: False)
+    t0 = _t.monotonic()
+    si._run_embed_rebuild_chunks(chunk_budget=0.0, max_stall=3)
+    assert _t.monotonic() - t0 < 15, "连续不推进必须放弃，不能无限重试"

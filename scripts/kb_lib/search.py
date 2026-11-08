@@ -1202,18 +1202,22 @@ class SearchIndex:
     def _embed_ckpt_vecs_path(self):
         return Path(str(EMBEDDINGS_FILE) + ".ckpt.npy")
 
+    def _content_hash(self, text):
+        """正文指纹：断点复用的键不能只有路径（用法见 build_embeddings 的复用分支）。"""
+        return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
+
     def _embed_ckpt_load(self):
-        """读断点 → (paths, vecs)；没有或读坏了返回 (None, None)。"""
+        """读断点 → (paths, vecs, meta)；没有或读坏了返回 (None, None, {})。"""
         mp, vp = self._embed_ckpt_meta_path(), self._embed_ckpt_vecs_path()
         if not mp.exists() or not vp.exists():
-            return None, None
+            return None, None, {}
         try:
             meta = json.loads(mp.read_text(encoding="utf-8"))
             arr = np.load(str(vp), allow_pickle=False)
-            return list(meta.get("paths") or []), arr
+            return list(meta.get("paths") or []), arr, meta
         except Exception:
             log.warning("嵌入断点读取失败，忽略", exc_info=True)
-            return None, None
+            return None, None, {}
 
     def _embed_ckpt_save(self, paths, vecs):
         try:
@@ -1221,11 +1225,15 @@ class SearchIndex:
             # 只记「已经算出来」的那一段：paths 与 vecs 必须逐行对齐，
             # 否则续跑时长度一比对不上，整份断点会被判为无效而白白重算。
             paths = list(paths)[:_n]
+            # 内容指纹：只比路径会张冠李戴 —— 正文改了而路径顺序没变时（末位编辑是常态），
+            # 复用旧向量等于把这次改动在向量面永久丢掉（2026-11-08 独立审查实测复现）。
+            hashes = [self._content_hash(c) for c in list(self.contents or [])[:_n]]
             _atomic_np_save(self._embed_ckpt_vecs_path(), vecs)
             mp = self._embed_ckpt_meta_path()
             tmp = Path(str(mp) + ".tmp")
             tmp.write_text(json.dumps(
-                {"paths": paths, "n": _n, "index_version": self._index_version},
+                {"paths": paths, "n": _n, "hashes": hashes,
+                 "index_version": self._index_version},
                 ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, mp)
         except Exception:
@@ -1256,10 +1264,17 @@ class SearchIndex:
             t.start()
             return True
 
-    def _run_embed_rebuild_chunks(self, chunk_budget=60.0):
-        """后台按片推进全量嵌入，直到向量面与 paths 对齐；片间让出 CPU。"""
+    def _run_embed_rebuild_chunks(self, chunk_budget=60.0, max_stall=5):
+        """后台按片推进全量嵌入，直到向量面与 paths 对齐；片间让出 CPU。
+
+        `max_stall`：连续多少片「一点没推进」就放弃。否则一旦嵌入服务或断点写盘持续失败，
+        这个循环会无限重试、每片白烧一整片的时间（2026-11-08 独立审查实测：把断点写盘
+        桩成失败后 3 秒起 6 批、线程永不退出，只能重启停）。
+        """
         try:
-            while True:
+            stall = 0
+            last_done = -1
+            while stall < max_stall:
                 if self.embeddings is not None and \
                         int(self.embeddings.shape[0]) == len(self.paths or []):
                     return
@@ -1268,7 +1283,13 @@ class SearchIndex:
                 if self.build_embeddings(budget=chunk_budget):
                     log.info("后台分片重建完成：%d 篇向量已对齐", len(self.paths or []))
                     return
+                # 「推进了没有」以断点里已算出的行数为准：不变就记一次停滞
+                ck_paths, _ck_vecs, ck_meta = self._embed_ckpt_load()
+                done = int(ck_meta.get("n") or 0) if ck_paths else 0
+                stall = stall + 1 if done <= last_done else 0
+                last_done = max(last_done, done)
                 time.sleep(0.5)
+            log.warning("后台分片重建连续 %d 片没有推进，本轮放弃（保留断点，等下次触发）", max_stall)
         except Exception:
             log.warning("后台分片重建异常", exc_info=True)
 
@@ -1301,16 +1322,27 @@ class SearchIndex:
             all_embeds = []
             start = 0
             if use_checkpoint:
-                ck_paths, ck_vecs = self._embed_ckpt_load()
-                if ck_paths and ck_vecs is not None and int(ck_vecs.shape[0]) == len(ck_paths):
+                ck_paths, ck_vecs, ck_meta = self._embed_ckpt_load()
+                ck_ok = (bool(ck_paths) and ck_vecs is not None
+                         and int(ck_vecs.shape[0]) == len(ck_paths)
+                         and int(ck_meta.get("index_version", -1)) == int(self._index_version))
+                if ck_ok:
+                    ck_hashes = list(ck_meta.get("hashes") or [])
+                    contents = list(self.contents or [])
                     n = 0
                     lim = min(len(ck_paths), len(paths))
-                    while n < lim and ck_paths[n] == paths[n]:
+                    # 逐行要求「路径 + 正文指纹」都对得上：正文改过就不能复用（否则这次改动
+                    # 会永久丢在向量面）；断点缺指纹（旧格式）也一律当不可复用，宁可重算。
+                    while (n < lim and ck_paths[n] == paths[n]
+                           and n < len(ck_hashes)
+                           and ck_hashes[n] == self._content_hash(contents[n])):
                         n += 1
                     if n:
                         all_embeds.append(ck_vecs[:n])
                         start = n
                         log.info("嵌入断点复用 %d/%d 行，从第 %d 行继续", n, _total, n)
+                elif ck_paths:
+                    log.info("嵌入断点不可复用（index_version 不符或格式过旧），本轮全量重算")
             # 2) 从 start 继续往后算
             _t0 = time.monotonic()
             _since_ckpt = 0
@@ -1331,14 +1363,18 @@ class SearchIndex:
                         i + len(batch), _total, budget,
                     )
                     return False
-            self.embeddings = np.vstack(all_embeds) if all_embeds else np.array([])
+            _new_emb = np.vstack(all_embeds) if all_embeds else np.array([])
             # 计算期间若 paths 变了（有人写入），本轮结果对不上最新状态：
             # 存断点（下次按新 paths 复用前缀）后丢弃，不落盘。
+            # ⚠️ 不能先把它赋给 self.embeddings 再撒手：旧值会被冲掉，而新值行数恰好等于最新
+            # paths 时会静默通过 is_vector_search_ready()（行数对上、内容错位）——
+            # 那比降级 BM25 更糟（2026-11-08 独立审查指出）。校验通过才赋值。
             if list(self.paths or []) != paths:
                 log.info("重建期间 paths 已变化（%d → %d 行），丢弃本轮结果并保留断点",
                          len(paths), len(self.paths or []))
-                self._embed_ckpt_save(paths, self.embeddings)
+                self._embed_ckpt_save(paths, _new_emb)
                 return False
+            self.embeddings = _new_emb
             # t6: 构建 FAISS 索引（IndexIDMap + 稳定 id）
             _ids = self._ensure_faiss_ids()
             self.faiss_index = self._build_faiss_index(self.embeddings, _ids)
@@ -2033,6 +2069,8 @@ class SearchIndex:
             self.faiss_index = None
             self._token_sets = None
             self._index_version += 1
+            # 断点文件也要清：空库/重建后若留着旧断点，续跑会拿它当基线（2026-11-08 独立审查指出）
+            self._embed_ckpt_clear()
             try:
                 self._prune_faiss_ids()
             except Exception:
@@ -2565,9 +2603,9 @@ def _init_index():
     if not loaded:
         search_index.build()
     elif get_setting("embedding_type") == "llm" and search_index.embeddings is None:
-        threading.Thread(
-            target=search_index.build_embeddings, daemon=True
-        ).start()
+        # 走统一门闸（单例线程 + 断点 + 分片）：直接起 build_embeddings 会绕过它，
+        # 与启动自愈/写入触发的重建并发改同一批索引文件（2026-11-08 独立审查指出）。
+        search_index._schedule_embed_rebuild()
     # 先执行一次增量刷新（启动时同步已变更文件）
     threading.Thread(
         target=search_index.incremental_refresh, daemon=True
