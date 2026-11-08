@@ -71,5 +71,10 @@ systemctl restart kb-server
 ```
 
 **遗留**：本次只保证「文本面不被向量上游拖垮」，不解决嵌入额度本身。额度耗尽
-期间语义检索不可用；额度恢复后下一轮增量刷新会重新尝试建立向量，也可手工执行
-`python3 scripts/kb-cli/kb-cli.py rebuild` 全量重建。
+期间语义检索不可用；额度恢复后下一轮增量刷新会重新尝试建立向量。
+
+**1.0.21 起不再需要手工全量重建**：向量面若不可用（没建过 / 与 `paths` 行数不一致），
+写入路径不再自己跑全量（那会把这次写入拖到分钟级），只标记并起后台单例线程；
+全量由 `_run_embed_rebuild_chunks()` 按片推进（每片 60s），片间落断点
+（`.embeddings.npy.ckpt.json` + `.npy`），**可跨进程续跑**，服务启动 20s 后也会自检补齐。
+需要人工介入时再用 `python3 scripts/kb-cli/kb-cli.py rebuild` 触发一次全量。
