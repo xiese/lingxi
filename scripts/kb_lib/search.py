@@ -1,6 +1,6 @@
 """知识库 API — 搜索索引（BM25 + BGE-M3 向量混合检索）"""
 
-import os, re, threading, time, hashlib, json, logging
+import os, re, threading, time, hashlib, json, logging, math
 from datetime import datetime, timezone
 import numpy as np
 from pathlib import Path
@@ -279,6 +279,18 @@ def _bm25_from_payload(json_part, arrays):
     return bm25
 
 
+def _term_freqs(tokens):
+    """token 列表 → 词频 dict（C：增量维护 BM25 时只对变更篇调用）。
+
+    与 rank_bm25.BM25._initialize 里 frequencies 的构造同构同序：键的插入顺序
+    就是词在该篇内首次出现的顺序，遍历该 dict 得到的顺序与构造 BM25Okapi 时一致。
+    """
+    freqs = {}
+    for w in tokens:
+        freqs[w] = freqs.get(w, 0) + 1
+    return freqs
+
+
 def _index_arrays_path():
     """数值数组文件路径：与 JSON 主索引同名前缀，避免再引一个配置常量。"""
     return Path(str(INDEX_FILE) + ".arrays.npz")
@@ -499,6 +511,53 @@ def _tokenize(text):
     if HAS_JIEBA:
         return list(_jieba_tokenizer(text))
     return text.split()
+
+
+# C（2026-11-12）：写入路径的 BM25 增量维护开关。默认走增量；需要一键回全量
+# （排障 / 对账 / 异常兜底）时设 KB_BM25_FULL_REBUILD=1（1/true/yes/on）即回到
+# 改动前的「全库重分词 + 整体重建 BM25」行为。
+_BM25_FULL_REBUILD = str(os.environ.get("KB_BM25_FULL_REBUILD", "") or "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+_malloc_trim_fn = None          # None=未探测；False=不可用；其它=可调用的 malloc_trim
+_malloc_trim_lock = threading.Lock()
+
+
+def _release_heap_to_os():
+    """A：把 glibc 已释放但未归还的堆交还 OS（malloc_trim(0)）。
+
+    背景（2026-11-12）：刷新 / 重建会产生 100MB 级瞬时分配（全库分词、
+    BM25 词频表），glibc 释放后不还给 OS，常驻水位只升不降 → 逼近 MemoryHigh
+    后长期 reclaim + swap。收尾调一次 malloc_trim(0)。
+
+    容错：非 glibc（musl/Windows）、取不到符号、调用失败都静默降级并返回 False，
+    绝不让刷新失败。返回 True 表示确实调过。
+    """
+    global _malloc_trim_fn
+    fn = _malloc_trim_fn
+    if fn is None:
+        with _malloc_trim_lock:
+            if _malloc_trim_fn is None:
+                try:
+                    import ctypes
+                    _libc = ctypes.CDLL("libc.so.6")
+                    _fn = _libc.malloc_trim
+                    _fn.argtypes = [ctypes.c_size_t]
+                    _fn.restype = ctypes.c_int
+                    _malloc_trim_fn = _fn
+                except Exception:
+                    log.debug("malloc_trim 不可用，跳过堆归还（不影响刷新）", exc_info=True)
+                    _malloc_trim_fn = False
+            fn = _malloc_trim_fn
+    if not fn:
+        return False
+    try:
+        fn(0)
+        return True
+    except Exception:
+        log.debug("malloc_trim 调用失败（忽略）", exc_info=True)
+        return False
 
 
 # ── 嵌入查询缓存（TTL 300秒，key 为 query MD5，线程安全，最大 1000 条防内存泄漏）──
@@ -774,6 +833,15 @@ class SearchIndex:
         self.contents = []
         self.embeddings = None
         self.faiss_index = None
+        # D（2026-11-12）：与 self.embeddings 逐行对应的路径台账（路径 → 向量行号），
+        # 供「按路径映射」而不是「只比行数」判定向量面是否错位。
+        self._emb_paths = None
+        # 台账只对它登记的那个矩阵对象负责：self.embeddings 被外部整体替换后
+        # （对象身份变了）台账即视为不可信，退回行数比对。
+        self._emb_paths_for = None
+        # C（2026-11-12）：BM25 增量维护用的「词 → 文档频次」表及其所属对象。
+        self._bm25_df = None
+        self._bm25_df_owner = None
         # t6: IndexIDMap 稳定 id 映射（path -> 整数 id），支持真增量增删
         self.faiss_ids = {}
         self._faiss_next_id = 1
@@ -877,6 +945,8 @@ class SearchIndex:
             write_faiss = False
             self.embeddings = None
             self.faiss_index = None
+            self._emb_paths = None    # D: 向量面已禁用，路径台账一并清空
+            self._emb_paths_for = None
             n_emb = 0
             n_faiss = 0
         else:
@@ -994,6 +1064,9 @@ class SearchIndex:
             tokenized = [_tokenize(c) for c in contents]
             with self.lock:
                 self.bm25 = BM25Okapi(tokenized)
+                # C：整体重建后旧文档频次表作废，置空让增量路径按需按新语料重建
+                self._bm25_df = None
+                self._bm25_df_owner = None
                 self.paths, self.contents = paths, contents
                 self.mtimes = mtimes
                 self._date_cache = {}   # T4: 全量重建，日期缓存整体失效
@@ -1015,6 +1088,9 @@ class SearchIndex:
             if _finish:
                 _progress_finish(ok=False, error=str(e))
             raise
+        finally:
+            # A（2026-11-12）：重建收尾把 glibc 已释放的堆交还 OS（容错，不影响重建）
+            _release_heap_to_os()
 
     @staticmethod
     def _build_faiss_index(embeddings, ids=None):
@@ -1375,6 +1451,8 @@ class SearchIndex:
                 self._embed_ckpt_save(paths, _new_emb)
                 return False
             self.embeddings = _new_emb
+            self._emb_paths = list(paths)   # D: 台账与本次嵌入逐行对应
+            self._emb_paths_for = self.embeddings
             # t6: 构建 FAISS 索引（IndexIDMap + 稳定 id）
             _ids = self._ensure_faiss_ids()
             self.faiss_index = self._build_faiss_index(self.embeddings, _ids)
@@ -1390,6 +1468,8 @@ class SearchIndex:
                 )
                 self.embeddings = None
                 self.faiss_index = None
+                self._emb_paths = None   # D: 向量面已禁用，路径台账一并清空
+                self._emb_paths_for = None
                 self.index_consistent = False
                 self.consistency_reason = f"paths({n_paths}) 与 embeddings({n_emb}) 不一致"
                 write_index_manifest(
@@ -1467,18 +1547,23 @@ class SearchIndex:
             # 使用 old_paths（传入的 pre-update 路径列表）构建索引映射，
             # 避免 self.paths 已更新导致 old_emb 与路径索引错位
             ref_paths = old_paths if old_paths is not None else self.paths
-            # 行数前置校验（2026-10-25）：keep_indices 是按 ref_paths 的长度算的，
+            # 对齐前置校验（2026-10-25 起）：keep_indices 是按 ref_paths 的长度算的，
             # 而 self.embeddings 可能比它少行（上一次增量/落盘异常留下的错位状态）。
             # 不先校验就直接 self.embeddings[keep_indices]，会抛
             #   IndexError: index N is out of bounds for axis 0 with size N
             # 该异常被下面的 except 吞掉后走全量重建 —— 于是「每次刷新都全量重建」，
             # waitress 线程被 40 秒级重建占满，表现成服务活着但所有请求超时
             # （生产 2026-10-25 03:21 实测：队列堆到 7 层）。
-            # 这里显式识别错位并降级，语义与「增量不可用」一致，不改变正确性。
-            if int(self.embeddings.shape[0]) != len(ref_paths):
+            # D（2026-11-12）：判据从「只比行数」换成「按路径映射比对」——行数相等
+            # 但顺序错位同样危险（keep_indices 取到别行的向量，且 n_emb == n_paths
+            # 会让 manifest 仍写 consistent:true，静默错位）。语义与「增量不可用」
+            # 一致：显式识别错位并降级，不改变正确性。
+            if not self._embeddings_aligned_with(ref_paths):
                 log.warning(
-                    "增量嵌入跳过：embeddings 行数(%d) 与 ref_paths(%d) 不一致，改走后台分片重建",
-                    int(self.embeddings.shape[0]), len(ref_paths),
+                    "增量嵌入跳过：embeddings 与 ref_paths 路径映射不一致"
+                    "（emb 行数 %s / ref_paths %d），改走后台分片重建",
+                    None if self.embeddings is None else int(self.embeddings.shape[0]),
+                    len(ref_paths or []),
                 )
                 self._schedule_embed_rebuild()
                 return
@@ -1493,12 +1578,18 @@ class SearchIndex:
                 # 只有删除、没有新增/替换：仍需剪掉被删行，否则 paths 与 embeddings 不一致
                 if removed:
                     self.embeddings = self.embeddings[keep_indices]
+                    # D: 台账同步剪掉被删行（保持「路径 → 向量行号」映射成立）
+                    self._emb_paths = [ref_paths[_i] for _i in keep_indices]
+                    self._emb_paths_for = self.embeddings
                 else:
                     return
             else:
                 self.embeddings = self._assemble_incremental_embeddings(
                     ref_paths, keep_indices, removed, replace_info, new_extra, new_embeds
                 )
+                # D: 组装按 self.paths（新顺序）逐行落位，台账同步
+                self._emb_paths = list(self.paths or [])
+                self._emb_paths_for = self.embeddings
             n_paths = len(self.paths or [])
             n_emb = int(self.embeddings.shape[0])
             if n_emb != n_paths:
@@ -1654,11 +1745,21 @@ class SearchIndex:
             old_paths_for_embed = list(self.paths)
             # 快照：文本侧异常时回滚，避免半写状态。嵌入失败不再走这里——
             # 2026-11-07 起嵌入只降级向量面、不回滚 paths/BM25。
+            # C2（2026-11-13）：快照重新保存 BM25 **引用**——增量维护已改为「造新对象 +
+            # 锁内一次性换引用」（不再就地改写旧对象），旧对象发布后恒定不变，存引用
+            # 即等于存旧状态；回滚退回 O(1) 引用还原，锁内不再做 O(corpus) 重建。
             _snap = (
                 list(self.paths or []), list(self.contents or []), dict(self.mtimes or {}),
-                self.bm25, self.embeddings, self.faiss_index, self._index_version,
+                self.embeddings, self.faiss_index, self._index_version,
+                self._emb_paths, self._emb_paths_for, self.bm25,
             )
-            tokenized = [_tokenize(c) for c in merged_contents]
+            # C：默认不再全库重分词——只有「增量不可用」（或 KB_BM25_FULL_REBUILD=1
+            # 要求全量）时才在锁外预先分词；tokenized=None 表示按需在锁内兜底，
+            # 见 _apply_incremental_docs_locked。
+            tokenized = (
+                None if self._bm25_can_increment(old_paths_for_embed)
+                else [_tokenize(c) for c in merged_contents]
+            )
             # 嵌入组装必须与 paths 更新留在**同一把锁内**（安全加固）：
             # 原先 build_embeddings_incremental 在锁外执行，并发的另一次刷新会读到
             # 「已更新的 self.paths + 尚未更新的 self.embeddings」，于是按新 paths
@@ -1676,14 +1777,27 @@ class SearchIndex:
             if _snap is not None:
                 try:
                     with self.lock:
-                        (self.paths, self.contents, self.mtimes, self.bm25,
-                         self.embeddings, self.faiss_index, self._index_version) = _snap
+                        (self.paths, self.contents, self.mtimes,
+                         self.embeddings, self.faiss_index, self._index_version,
+                         self._emb_paths, self._emb_paths_for, self.bm25) = _snap
+                        # C2：BM25 回滚 = O(1) 引用还原（旧对象发布后不可变，快照里
+                        # 那个对象就是旧状态）。频次表台账一并作废：它可能在失败的
+                        # 那次增量里被就地改过（纯新增分支就地加计数），也可能指向
+                        # 已被丢弃的新对象；置空让下次增量按恢复后的 doc_freqs 重建
+                        # （一次性 O(词表) 走表，不是锁内全库重分词）。
+                        self._bm25_df = None
+                        self._bm25_df_owner = None
+                        # B: 分词集合缓存跟着回滚的内容一起作废（与改动前一致）
+                        self._token_sets = None
                         self._save_index()
                     log.warning("增量刷新失败，已回滚到刷新前索引（保持原状）: %s", e)
                 except Exception:
                     log.warning("增量刷新失败且回滚失败", exc_info=True)
             self.end_rebuild(ok=False, error=str(e))
             raise
+        finally:
+            # A（2026-11-12）：刷新收尾把 glibc 已释放的堆交还 OS（容错，失败不影响刷新）
+            _release_heap_to_os()
 
     @staticmethod
     def _embedding_preflight():
@@ -1716,6 +1830,207 @@ class SearchIndex:
         merged_contents = list(path_to_content.values()) + changed_contents
         return merged_paths, merged_contents
 
+    def _token_sets_incremental(self, merged_paths, merged_contents,
+                                changed_paths, changed_contents):
+        """B（2026-11-12）：返回与新 (paths, contents) 同序的分词集合：变更篇重算、
+        未变篇复用旧集合，不再整表重建（959,837 个 set，冷检索 +45.7MB）。
+
+        必须在 self.paths / self.contents 换入**之前**调用（旧缓存是旧索引的逐行
+        集合，按路径复用）。调用方已持有 self.lock。
+        旧缓存缺失或行数与旧索引不符时返回 None —— 由 _token_sets_for() 兜底重建，
+        语义与「置 None」完全一致，本方法不承担正确性责任。
+        """
+        old_sets = getattr(self, "_token_sets", None)
+        if old_sets is None or len(old_sets) != len(self.paths or []):
+            return None
+        old_by_path = dict(zip(self.paths, old_sets))
+        changed_set = set(changed_paths or [])
+        new_sets = []
+        for p, c in zip(merged_paths, merged_contents):
+            if p in changed_set:
+                new_sets.append(set(_tokenize(c)))
+                continue
+            s = old_by_path.get(p)
+            if s is None:
+                return None      # 旧缓存里缺这一篇：退回兜底整表重建
+            new_sets.append(s)
+        return new_sets
+
+    # ── C（2026-11-12）：BM25 统计量增量维护 ──
+
+    def _bm25_can_increment(self, old_paths):
+        """增量维护 BM25 的前置条件（纯读，不改状态）。
+
+        供调用方在**锁外**决定是否需要预先做全库分词：只有整体重建才需要。
+        与锁内 `_bm25_increment` 的判据一致（那边还会再校验一次，失败则兜底）。
+        """
+        if _BM25_FULL_REBUILD or self.bm25 is None:
+            return False
+        n_old = len(list(old_paths or []))
+        try:
+            return (len(self.bm25.doc_freqs) == n_old
+                    and len(self.bm25.doc_len) == n_old
+                    and isinstance(getattr(self.bm25, "idf", None), dict))
+        except Exception:
+            return False
+
+    def _bm25_rebuild_from_contents(self):
+        """按 self.contents 整体重建 BM25，并作废旧文档频次表（兜底用，无调用点）。"""
+        self._bm25_df = None
+        self._bm25_df_owner = None
+        if not self.contents:
+            return None
+        return BM25Okapi([_tokenize(c) for c in self.contents])
+
+    def _bm25_df_rebuild(self, doc_freqs=None):
+        """（重）建「词 → 文档频次」表，并登记它所属的 BM25 对象。
+
+        顺序按语料顺序（文档顺序 + 篇内首次出现顺序）插入，与 BM25Okapi 内部
+        `_initialize` 的 nd 同序 —— 后续重算 average_idf 的加法顺序与构造时
+        相同，浮点结果可逐位对账。
+        """
+        freqs_list = self.bm25.doc_freqs if doc_freqs is None else doc_freqs
+        df = {}
+        for freqs in freqs_list or []:
+            for term in freqs:
+                df[term] = df.get(term, 0) + 1
+        self._bm25_df = df
+        self._bm25_df_owner = self.bm25
+        return df
+
+    def _bm25_increment(self, merged_paths, merged_contents, changed_paths,
+                        changed_contents, removed, old_paths):
+        """C（2026-11-12）：按变更集增量维护 BM25，只对变更/新增笔记分词。
+
+        成功时返回**新的 BM25Okapi 对象**（统计量 doc_freqs / doc_len /
+        corpus_size / avgdl / idf / average_idf 与
+        `BM25Okapi([_tokenize(c) for c in merged_contents])` 同口径 —— 同一份数据、
+        同一个 query 的打分可逐条对账），由调用方在锁内做一次引用替换
+        `self.bm25 = 新对象`；**旧对象一个属性都不改**，因为它可能正被读方使用。
+
+        C2（2026-11-13）：turn 1 的实现是就地改写 self.bm25 的统计量，两个后果实测成立
+        ——①2 读 1 写下读方 `get_scores` 撞 `ValueError: operands could not be
+        broadcast together`（刚建的分数数组长度与 doc_freqs 不同长）；②确定性交错时
+        **静默错篇**（读方按旧 paths 行号报出已被删掉的那一篇）。改回「新对象引用
+        替换」后，读方在锁内取到的引用在其整个使用期内恒定不变。
+
+        任何前置条件不满足或中途异常一律返回 None，由调用方退回整体重建
+        （等价改动前行为）——最坏情况不会写坏索引。
+
+        锁：调用方已持有 self.lock，本方法不自行加锁。
+        """
+        bm25 = self.bm25
+        if bm25 is None or _BM25_FULL_REBUILD:
+            return None
+        changed_paths = list(changed_paths or [])
+        changed_contents = list(changed_contents or [])
+        if len(set(changed_paths)) != len(changed_paths):
+            return None     # 同一篇重复出现：映射不成立，退回整体重建
+        if len(changed_paths) != len(changed_contents):
+            return None     # 路径与正文不成对：不猜，退回整体重建
+        old_paths = list(old_paths or [])
+        old_freqs = getattr(bm25, "doc_freqs", None)
+        old_lens = getattr(bm25, "doc_len", None)
+        idf = getattr(bm25, "idf", None)
+        if not isinstance(idf, dict) or old_freqs is None or old_lens is None:
+            return None
+        if len(old_freqs) != len(old_paths) or len(old_lens) != len(old_paths):
+            return None
+        if len(set(old_paths)) != len(old_paths):
+            return None     # 旧索引里有重复路径
+        df = self._bm25_df
+        if df is None or getattr(self, "_bm25_df_owner", None) is not bm25:
+            df = self._bm25_df_rebuild()
+        try:
+            old_freq_by_path = dict(zip(old_paths, old_freqs))
+            old_len_by_path = dict(zip(old_paths, old_lens))
+            # 1) 只对变更/新增笔记分词（未变篇复用已缓存的词频 dict，不复制）
+            changed_freqs = {}
+            for p, c in zip(changed_paths, changed_contents):
+                _toks = _tokenize(c)
+                changed_freqs[p] = (_term_freqs(_toks), len(_toks))
+            removed_set = set(removed or [])
+            # 2) 按 merged 顺序拼新表（未变篇直接沿用旧行对象）
+            new_freqs, new_lens = [], []
+            for p in merged_paths:
+                hit = changed_freqs.get(p)
+                if hit is not None:
+                    new_freqs.append(hit[0])
+                    new_lens.append(hit[1])
+                    continue
+                if p in removed_set:
+                    return None     # 已删仍留在合并结果里：状态不自洽
+                _f = old_freq_by_path.get(p)
+                _l = old_len_by_path.get(p)
+                if _f is None or _l is None:
+                    return None     # 旧行缺失：退回整体重建
+                new_freqs.append(_f)
+                new_lens.append(_l)
+            n_docs = len(new_freqs)
+            if n_docs == 0:
+                return None
+            # 3) 文档频次表：
+            #    「纯新增」（无删除、改动篇都是新篇）可以保序增量——新词的键插在表尾，
+            #    与它在语料里首次出现的位置一致；一旦动过旧篇（改写）或有删除，
+            #    某个词的首次出现位置就可能变，而键顺序变了 average_idf 的浮点
+            #    加法顺序就与 BM25Okapi 构造时不同（实测相对差 ~4e-16）。此时按
+            #    新 doc_freqs 的语料顺序整表重建频次表，保证逐位一致。
+            if (not removed) and all(p not in old_freq_by_path for p in changed_paths):
+                for p in changed_paths:
+                    for term in changed_freqs[p][0]:
+                        df[term] = df.get(term, 0) + 1
+            else:
+                df = self._bm25_df_rebuild(new_freqs)
+            # 4) 重算 idf / average_idf（公式与 rank_bm25.BM25Okapi._calc_idf 一致：
+            #    先按 nd 口径算原始 idf 并求均值，再把负值统一压到 epsilon * 均值）
+            #    C2：算在**新 dict** 上 —— 旧对象的 idf 可能正被锁外的读方使用，
+            #    就地改它就会重现「读方看到半新半旧统计量」的老问题。
+            new_idf = dict(idf)
+            idf_sum = 0.0
+            n_terms = 0
+            for term, freq in df.items():
+                if freq <= 0:
+                    continue
+                raw = math.log(n_docs - freq + 0.5) - math.log(freq + 0.5)
+                new_idf[term] = raw
+                idf_sum += raw
+                n_terms += 1
+            if n_terms == 0:
+                return None
+            # 已消失的词要从 idf 里剔掉，否则词表与 nd 不同构（average_idf 分母不同）
+            if len(new_idf) != n_terms:
+                for term in [t for t in new_idf if df.get(t, 0) <= 0]:
+                    new_idf.pop(term, None)
+                if len(new_idf) != n_terms:
+                    return None
+            average_idf = idf_sum / n_terms
+            eps = float(getattr(bm25, "epsilon", 0.25)) * average_idf
+            for term, freq in df.items():
+                if freq > 0 and new_idf[term] < 0:
+                    new_idf[term] = eps
+            # 5) 造**新对象**再挂统计量：doc_freqs / doc_len 直接复用刚算好的两个 list
+            #    （不复制，省内存的目标不许因本修复丢掉），idf 用上面那份副本
+            #    （不与旧对象共享同一个 dict）。返回给调用方在锁内换引用。
+            nb = BM25Okapi.__new__(BM25Okapi)
+            nb.k1 = float(getattr(bm25, "k1", 1.5))
+            nb.b = float(getattr(bm25, "b", 0.75))
+            nb.epsilon = float(getattr(bm25, "epsilon", 0.25))
+            nb.tokenizer = getattr(bm25, "tokenizer", None)   # 与 _bm25_from_payload 同属性集
+            nb.corpus_size = n_docs
+            nb.avgdl = sum(new_lens) / n_docs
+            nb.average_idf = average_idf
+            nb.idf = new_idf
+            nb.doc_freqs = new_freqs
+            nb.doc_len = new_lens
+            # 台账：df 描述的是**新对象**的 doc_freqs，owner 跟着指向新对象；
+            # 下次增量据此判断能否复用这张表（owner 不是当前对象就重建）
+            self._bm25_df = df
+            self._bm25_df_owner = nb
+            return nb
+        except Exception:
+            log.warning("BM25 增量维护失败，退回整体重建", exc_info=True)
+            return None
+
     def _apply_incremental_docs_locked(self, merged_paths, merged_contents, mtimes,
                                        tokenized, changed_paths, changed_contents,
                                        removed, old_paths):
@@ -1725,8 +2040,31 @@ class SearchIndex:
         完全相同的锁范围（embedding_api 调用期间锁必须保持持有，理由见
         incremental_refresh 中的注释）。文本索引先落盘；嵌入未对齐只降级
         向量面（embeddings/faiss 置空后落盘），不再抛错回滚文本索引。
+
+        `tokenized`：全库分词结果；C（2026-11-12）起默认传 None（走 BM25 增量，
+        不需要全库分词），只有「增量不可用 / KB_BM25_FULL_REBUILD=1」时才由调用
+        方在锁外算好传入；若锁内仍需要整体重建而它又是 None，会就地兜底分词
+        （只发生在异常兜底路径）。
         """
-        self.bm25 = BM25Okapi(tokenized)
+        # B：分词集合按 changed/removed 就地增删（必须在 paths/contents 换入前算，
+        # 旧缓存是旧索引的逐行集合）。
+        _new_token_sets = self._token_sets_incremental(
+            merged_paths, merged_contents, changed_paths, changed_contents
+        )
+        # C：只对变更/新增篇分词、造新 BM25 对象；不可行才整体重建。
+        # C2（2026-11-13）：换引用也在锁内做 —— 读方在锁内取到 bm25/paths 后跑到锁外
+        # 算分，锁内一次性换引用才能保证它拿到的那一份始终自洽、且发布后不可变。
+        _nb = self._bm25_increment(merged_paths, merged_contents, changed_paths,
+                                   changed_contents, removed, old_paths)
+        if _nb is not None:
+            self.bm25 = _nb
+        else:
+            self.bm25 = BM25Okapi(
+                tokenized if tokenized is not None
+                else [_tokenize(c) for c in merged_contents]
+            )
+            self._bm25_df = None          # 整体重建后频次表作废
+            self._bm25_df_owner = None
         self.paths = merged_paths
         self.contents = merged_contents
         self.mtimes = mtimes
@@ -1736,7 +2074,7 @@ class SearchIndex:
             self._importance_cache.pop(_p, None)  # T-23-a: 改了 importance 要立刻生效
             self._meta_cache.pop(_p, None)  # 2026-10-22: 改了标题/标签要立刻生效
         self._index_version += 1  # Bump: 失效旧嵌入缓存
-        self._token_sets = None    # 失效分词集合缓存
+        self._token_sets = _new_token_sets   # B: 就地更新后的分词集合（None=兜底重建）
         self._save_index()  # 在锁内持久化，避免 search 线程读到不一致状态
         if get_setting("embedding_type") == "llm":
             # 文本索引（paths/BM25）与向量嵌入是两件事：文本部分此刻已经落盘
@@ -1757,16 +2095,45 @@ class SearchIndex:
                 )
                 self.embeddings = None
                 self.faiss_index = None
+                self._emb_paths = None   # D: 向量面已禁用，路径台账一并清空
+                self._emb_paths_for = None
                 self._save_index()
 
     def _incremental_embeddings_aligned(self):
-        """embeddings 与 paths 行数是否对齐；访问异常按未对齐处理。"""
+        """embeddings 与 paths 是否按路径一一对齐；访问异常按未对齐处理。"""
+        return self._embeddings_aligned_with(self.paths)
+
+    def _embeddings_aligned_with(self, ref_paths):
+        """向量面是否与 ref_paths 按「路径 → 向量行号」逐条对应（D，2026-11-12）。
+
+        原先只比行数：`embeddings.shape[0] == len(ref_paths)` 对「行数相同但顺序
+        错位」完全放行，而 keep_indices / replace_info 都按位置算，错位时取到的
+        是别行的向量，且计数校验照样通过（静默错位）。
+
+        台账 self._emb_paths 与 self.embeddings 逐行对应，在每次写入 embeddings
+        时同步维护，并登记它描述的那个矩阵对象（_emb_paths_for）。台账缺失、或
+        self.embeddings 已被换成别的矩阵对象（台账描述不了它）时，退回行数比对，
+        语义与改动前一致。返回 False 表示「不可按增量使用」。
+        """
         if self.embeddings is None:
             return False
         try:
-            return int(self.embeddings.shape[0]) == len(self.paths)
+            n_rows = int(self.embeddings.shape[0])
         except Exception:
             return False
+        ref_paths = list(ref_paths or [])
+        emb_paths = getattr(self, "_emb_paths", None)
+        if emb_paths is None or getattr(self, "_emb_paths_for", None) is not self.embeddings:
+            return n_rows == len(ref_paths)
+        emb_paths = list(emb_paths)
+        if len(emb_paths) != n_rows:
+            return False
+        idx_of = {p: i for i, p in enumerate(emb_paths)}   # 路径 → 向量行号
+        if len(idx_of) != n_rows:
+            return False   # 台账里有重复路径：映射不成立
+        if n_rows != len(ref_paths):
+            return False   # 真的少/多一行
+        return all(idx_of.get(p) == i for i, p in enumerate(ref_paths))
 
 
     def peek_stale(self):
@@ -1853,6 +2220,9 @@ class SearchIndex:
                     self.contents = payload.get("contents", [])
                     self.mtimes = payload.get("mtimes", {})
                     self._token_sets = None  # 索引不存分词集合，置脏按需重建
+                    # C: 索引不存「文档频次表」，增量路径首次用到时按新语料重建
+                    self._bm25_df = None
+                    self._bm25_df_owner = None
                 loaded = True
             except Exception:
                 log.warning("主索引读取失败，将全量重建: %s", INDEX_FILE, exc_info=True)
@@ -1861,6 +2231,8 @@ class SearchIndex:
             try:
                 tokenized = [_tokenize(c) for c in self.contents]
                 self.bm25 = BM25Okapi(tokenized)
+                self._bm25_df = None          # C: 整体重建，频次表作废
+                self._bm25_df_owner = None
                 self._save_index()
             except Exception:
                 log.warning("search.py 异常", exc_info=True)
@@ -1942,11 +2314,16 @@ class SearchIndex:
                 )
                 self.embeddings = None
                 self.faiss_index = None
+                self._emb_paths = None   # D: 向量面已禁用，路径台账一并清空
+                self._emb_paths_for = None
                 self.index_consistent = False
                 self.consistency_reason = reason
             else:
                 self.embeddings = embeddings
                 self.faiss_index = faiss_index
+                # D: 落盘的 embeddings.npy 与落盘的 paths 逐行对齐，台账按此登记
+                self._emb_paths = list(self.paths or [])
+                self._emb_paths_for = self.embeddings
                 self.index_consistent = True
                 self.consistency_reason = "ok"
                 # t6: 旧格式裸 IndexFlatIP → 自动升级为 IndexIDMap（真增量前提），不丢向量
@@ -1954,6 +2331,8 @@ class SearchIndex:
         else:
             self.embeddings = None
             self.faiss_index = None
+            self._emb_paths = None   # D: 向量面已禁用，路径台账一并清空
+            self._emb_paths_for = None
             # 无向量时，paths/contents 对齐即可视为 BM25 一致
             self.index_consistent = ok_pc
             self.consistency_reason = reason_pc if not ok_pc else "ok"
@@ -2065,7 +2444,11 @@ class SearchIndex:
             self._importance_cache = {}  # T-23-a: 同上
             self._meta_cache = {}   # 2026-10-22: 标题/标签缓存一并失效
             self.bm25 = None
+            self._bm25_df = None          # C: 索引清空，频次表一并作废
+            self._bm25_df_owner = None
             self.embeddings = None
+            self._emb_paths = None        # D: 向量面清空，路径台账一并清空
+            self._emb_paths_for = None
             self.faiss_index = None
             self._token_sets = None
             self._index_version += 1

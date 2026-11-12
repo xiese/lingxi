@@ -1,3 +1,32 @@
+## 1.0.23
+
+2026-11-13。**知识库内存治本**：写入不再全库重分词、不再整体重建 BM25；把 glibc 已释放的堆还给系统；修掉向量面一条「差一行就全量重嵌入」的 off-by-one。
+
+### 背景
+
+生产 `kb-server` 常驻内存逐轮抬高（实测 643M → 740M → 765M，锯齿 + 峰值递升），逼近自设 `MemoryHigh=800M` 后长期被内核 reclaim + 换页（`memory.events high` 触发 40611 次、swap 被吃掉 1.3G）。只读排查定位到三处叠加：
+
+1. `incremental_refresh` 每次写入都 `[_tokenize(c) for c in merged_contents]` **全库重分词**（同构实测单次 +158MB 瞬时）；
+2. 紧接着 `BM25Okapi(tokenized)` **整体重建**（+34MB，del 后不回落）；
+3. 刷新把 `_token_sets` 置 None → 之后第一次检索重建成 959,837 个 set（冷检索实测 +45.7MB，暖检索仅 +1.3MB）。
+
+glibc 释放的堆不还给 OS，于是每次写入都把水位往上顶一档、不再回落。
+
+### 四处改动
+
+| # | 改什么 | 为什么 |
+|---|---|---|
+| **C** | `incremental_refresh` 只对**变更篇**分词，`doc_freqs` / `doc_len` / `idf` / `average_idf` **增量维护**（新增 `_bm25_can_increment` / `_bm25_df_rebuild` / `_bm25_rebuild_from_contents` / `_bm25_increment`） | 消除 +158MB 的瞬时全量分词与 +34MB 的整体重建；保留 `KB_BM25_FULL_REBUILD=1` 一键回全量 |
+| **B** | `_token_sets` 按变更项**就地增删**（新增 `_token_sets_incremental`），不再整体置 None | 消除每次写入后首次检索的 +45MB |
+| **A** | 刷新/重建收尾调 `malloc_trim(0)`（新增 `_release_heap_to_os`，非 glibc 静默降级） | glibc 释放的堆不归还，主动还给 OS |
+| **D** | 向量面校验从「比行数」改为「按 path → 向量行号」逐条对应（新增 `_embeddings_aligned_with` + 台账 `_emb_paths` / `_emb_paths_for`；台账缺失时退回行数比对） | 修 off-by-one：`embeddings 行数(N)` 与 `ref_paths(N-1)` 恒差 1 → 每次写入都判定不一致、走**全量重嵌入**（重复写 25MB 产物 + 烧嵌入额度）；顺带堵住「行数相同但顺序错位」的静默错位 |
+
+### 验证
+
+- `python3 -m py_compile` 通过。
+- 全量测试 **746 passed / 13 failed / 2 skipped**；13 个失败全部在 `tests/test_path_probe.py`，**已对照证实是既有失败**（用改动前的备份版本跑同一文件：同样 13 failed / 17 passed），与本轮无关。
+- 独立复核班（异构模型）：见本节末尾追加。
+
 ## 1.0.22
 
 2026-11-08。**修 1.0.21 引入的三个洞 + 开源前的隐私与身份收口**。
